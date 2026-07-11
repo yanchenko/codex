@@ -823,6 +823,11 @@ fn hook_event_label(event_name: HookEventName) -> &'static str {
         HookEventName::SubagentStart => "SubagentStart",
         HookEventName::SubagentStop => "SubagentStop",
         HookEventName::Stop => "Stop",
+        // `MessageDisplay` never emits `HookStarted`/`HookCompleted` (see
+        // `docs/proposals/message-display-hook.md` section 1), so a transcript
+        // cell for it should never actually render. Return a plain label
+        // rather than panicking in case that invariant is ever violated.
+        HookEventName::MessageDisplay => "MessageDisplay",
     }
 }
 

@@ -17,5 +17,6 @@ expression: "render_lines(&view, 112)"
   SubagentStart         0           0           When a subagent is created                                      
   SubagentStop          0           0           Right before a subagent ends its turn                           
   Stop                  0           0           Right before Codex ends its turn                                
+  MessageDisplay        0           0           As the assistant's reply streams, repeatedly                    
                                                                                                                 
   Press enter to view hooks; esc to close
