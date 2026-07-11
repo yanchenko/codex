@@ -4060,6 +4060,7 @@ async fn build_hooks_for_config(
         plugin_hook_load_warnings,
         shell_program: hook_shell_program,
         shell_args: hook_shell_argv,
+        message_display_debounce_ms: config.message_display_debounce_ms,
     })
 }
 

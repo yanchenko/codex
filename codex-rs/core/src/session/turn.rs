@@ -80,6 +80,7 @@ use codex_extension_api::TurnInputContext;
 use codex_extension_api::TurnInputEnvironment;
 use codex_features::Feature;
 use codex_git_utils::get_git_repo_root_with_fs;
+use codex_hooks::MessageDisplayHandle;
 use codex_protocol::ResponseItemId;
 use codex_protocol::config_types::AutoCompactTokenLimitScope;
 use codex_protocol::config_types::ModeKind;
@@ -1621,6 +1622,7 @@ async fn handle_plan_segments(
     state: &mut PlanModeStreamState,
     item_id: &str,
     segments: Vec<ProposedPlanSegment>,
+    mut message_display: Option<&mut MessageDisplayHandle>,
 ) {
     for segment in segments {
         match segment {
@@ -1648,6 +1650,10 @@ async fn handle_plan_segments(
                 };
                 maybe_emit_pending_agent_message_start(sess, turn_context, state, item_id).await;
 
+                if let Some(message_display) = message_display.as_deref_mut() {
+                    #[allow(deprecated)]
+                    message_display.on_delta(item_id, &delta, &turn_context.cwd);
+                }
                 let event = AgentMessageContentDeltaEvent {
                     thread_id: sess.thread_id.to_string(),
                     turn_id: turn_context.sub_id.clone(),
@@ -1684,6 +1690,7 @@ async fn emit_streamed_assistant_text_delta(
     plan_mode_state: Option<&mut PlanModeStreamState>,
     item_id: &str,
     parsed: ParsedAssistantTextDelta,
+    message_display: Option<&mut MessageDisplayHandle>,
 ) {
     if parsed.is_empty() {
         return;
@@ -1695,12 +1702,24 @@ async fn emit_streamed_assistant_text_delta(
     }
     if let Some(state) = plan_mode_state {
         if !parsed.plan_segments.is_empty() {
-            handle_plan_segments(sess, turn_context, state, item_id, parsed.plan_segments).await;
+            handle_plan_segments(
+                sess,
+                turn_context,
+                state,
+                item_id,
+                parsed.plan_segments,
+                message_display,
+            )
+            .await;
         }
         return;
     }
     if parsed.visible_text.is_empty() {
         return;
+    }
+    if let Some(message_display) = message_display {
+        #[allow(deprecated)]
+        message_display.on_delta(item_id, &parsed.visible_text, &turn_context.cwd);
     }
     let event = AgentMessageContentDeltaEvent {
         thread_id: sess.thread_id.to_string(),
@@ -1719,9 +1738,27 @@ async fn flush_assistant_text_segments_for_item(
     plan_mode_state: Option<&mut PlanModeStreamState>,
     parsers: &mut AssistantMessageStreamParsers,
     item_id: &str,
+    mut message_display: Option<&mut MessageDisplayHandle>,
 ) {
     let parsed = parsers.finish_item(item_id);
-    emit_streamed_assistant_text_delta(sess, turn_context, plan_mode_state, item_id, parsed).await;
+    emit_streamed_assistant_text_delta(
+        sess,
+        turn_context,
+        plan_mode_state,
+        item_id,
+        parsed,
+        message_display.as_deref_mut(),
+    )
+    .await;
+    // Force a final, non-debounced MessageDisplay delivery for this item
+    // regardless of whether this round produced any fresh text - most items
+    // reach this flush with nothing new to parse (their last chunk already
+    // went out via a prior delta), but finality is a property of the item
+    // ending, not of there being a new delta this round.
+    if let Some(message_display) = message_display {
+        #[allow(deprecated)]
+        message_display.finish_item(item_id, &turn_context.cwd);
+    }
 }
 
 /// Flush any remaining buffered assistant text parser state at response completion.
@@ -1730,6 +1767,7 @@ async fn flush_assistant_text_segments_all(
     turn_context: &TurnContext,
     mut plan_mode_state: Option<&mut PlanModeStreamState>,
     parsers: &mut AssistantMessageStreamParsers,
+    mut message_display: Option<&mut MessageDisplayHandle>,
 ) {
     for (item_id, parsed) in parsers.drain_finished() {
         emit_streamed_assistant_text_delta(
@@ -1738,8 +1776,13 @@ async fn flush_assistant_text_segments_all(
             plan_mode_state.as_deref_mut(),
             &item_id,
             parsed,
+            message_display.as_deref_mut(),
         )
         .await;
+        if let Some(message_display) = message_display.as_deref_mut() {
+            #[allow(deprecated)]
+            message_display.finish_item(&item_id, &turn_context.cwd);
+        }
     }
 }
 
@@ -1996,6 +2039,12 @@ async fn try_run_sampling_request(
     let plan_mode = turn_context.collaboration_mode.mode == ModeKind::Plan;
     let mut assistant_message_stream_parsers = AssistantMessageStreamParsers::new(plan_mode);
     let mut plan_mode_state = plan_mode.then(|| PlanModeStreamState::new(&turn_context.sub_id));
+    // `None` whenever no `MessageDisplay` handlers are configured, so every
+    // call site below is a single cheap `Option::None` branch on this
+    // per-token-delta hot path rather than doing any real work.
+    let mut message_display = sess
+        .hooks()
+        .message_display_handle(sess.thread_id, turn_context.sub_id.clone());
     let defer_streamed_turn_items_for_contributors =
         !sess.services.extensions.turn_item_contributors().is_empty();
     let mut active_item_is_streaming_to_client = false;
@@ -2069,6 +2118,7 @@ async fn try_run_sampling_request(
                         plan_mode_state.as_mut(),
                         &mut assistant_message_stream_parsers,
                         &item_id,
+                        message_display.as_mut(),
                     )
                     .await;
                 }
@@ -2212,6 +2262,7 @@ async fn try_run_sampling_request(
                                 Some(state),
                                 item_id,
                                 parsed,
+                                message_display.as_mut(),
                             )
                             .await;
                         }
@@ -2285,6 +2336,7 @@ async fn try_run_sampling_request(
                     &turn_context,
                     plan_mode_state.as_mut(),
                     &mut assistant_message_stream_parsers,
+                    message_display.as_mut(),
                 )
                 .await;
                 let budget_result = sess
@@ -2319,6 +2371,7 @@ async fn try_run_sampling_request(
                             plan_mode_state.as_mut(),
                             &item_id,
                             parsed,
+                            message_display.as_mut(),
                         )
                         .await;
                     } else {
@@ -2459,6 +2512,7 @@ async fn try_run_sampling_request(
         &turn_context,
         plan_mode_state.as_mut(),
         &mut assistant_message_stream_parsers,
+        message_display.as_mut(),
     )
     .await;
 
