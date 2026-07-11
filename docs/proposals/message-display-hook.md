@@ -4,6 +4,25 @@ Status: draft design doc, revised after an adversarial review pass. Research
 performed against this clone (`codex-rs`) directly — file/line references below
 are real, not illustrative, and were independently re-verified in review.
 
+**Implementation status (this branch, updated after building the §5 scope):**
+the "smallest defensible first PR" described in §5 is implemented — new
+`HookEventName::MessageDisplay` variant, config schema field (including the
+configurable debounce this doc's §4 preferred, not just a fixed constant),
+discovery/trust reuse (verified unchanged, as predicted), the new
+`hooks/src/events/message_display.rs` dispatch module, and both `turn.rs`
+insertion points. One correction to this doc's own design in §2/§3: the
+"thread `is_final: bool` through `emit_streamed_assistant_text_delta`" plan
+turned out to be insufficient on its own — tracing the existing early-return
+guards in that function showed they would silently swallow the final
+MessageDisplay delivery whenever a flush call happens to carry no fresh text
+that round (the common case, since most items already streamed their last
+chunk earlier). The implementation instead has `MessageDisplayHandle` track
+per-item cumulative text itself and exposes a separate `finish_item` that the
+two flush wrappers call unconditionally, independent of that round's parsed
+content. Bounded drain-at-teardown is still deferred, as this doc recommends.
+Deferred/fast-follow items from §4/§5 (configurable debounce aside) are
+otherwise unchanged from what's described below.
+
 **Process note (read this first):** `docs/contributing.md` in this repo states
 that external contributions are **invitation-only** — "the Codex team does not
 accept unsolicited code contributions... Pull requests that have not been
