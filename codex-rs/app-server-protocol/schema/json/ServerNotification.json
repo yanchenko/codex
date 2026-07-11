@@ -2015,7 +2015,8 @@
         "userPromptSubmit",
         "subagentStart",
         "subagentStop",
-        "stop"
+        "stop",
+        "messageDisplay"
       ],
       "type": "string"
     },

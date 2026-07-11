@@ -453,6 +453,9 @@ pub struct ManagedHooksRequirements {
     #[serde(rename = "Stop")]
     #[ts(rename = "Stop")]
     pub stop: Vec<ConfiguredHookMatcherGroup>,
+    #[serde(rename = "MessageDisplay")]
+    #[ts(rename = "MessageDisplay")]
+    pub message_display: Vec<ConfiguredHookMatcherGroup>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]

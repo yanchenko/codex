@@ -285,6 +285,12 @@
     },
     "ManagedHooksRequirements": {
       "properties": {
+        "MessageDisplay": {
+          "items": {
+            "$ref": "#/definitions/ConfiguredHookMatcherGroup"
+          },
+          "type": "array"
+        },
         "PermissionRequest": {
           "items": {
             "$ref": "#/definitions/ConfiguredHookMatcherGroup"
@@ -359,6 +365,7 @@
         }
       },
       "required": [
+        "MessageDisplay",
         "PermissionRequest",
         "PostCompact",
         "PostToolUse",
