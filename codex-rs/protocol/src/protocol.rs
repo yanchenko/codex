@@ -1492,6 +1492,7 @@ pub enum HookEventName {
     SubagentStart,
     SubagentStop,
     Stop,
+    MessageDisplay,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]

@@ -913,6 +913,11 @@ pub struct Config {
     /// This is a runtime-only knob populated from invocation overrides, not from config files.
     pub bypass_hook_trust: bool,
 
+    /// `[hooks] message_display_debounce_ms` from `config.toml`: the debounce
+    /// window, in milliseconds, between `MessageDisplay` hook deliveries
+    /// while an assistant reply streams. `None` uses the built-in default.
+    pub message_display_debounce_ms: Option<u64>,
+
     /// Optional URI-based file opener. If set, citations to files in the model
     /// output will be hyperlinked using the specified URI scheme.
     pub file_opener: UriBasedFileOpener,
@@ -3885,6 +3890,10 @@ impl Config {
             ephemeral: ephemeral.unwrap_or_default(),
             extra_config: None,
             bypass_hook_trust,
+            message_display_debounce_ms: cfg
+                .hooks
+                .as_ref()
+                .and_then(|hooks| hooks.message_display_debounce_ms),
             file_opener: cfg.file_opener.unwrap_or(UriBasedFileOpener::VsCode),
             codex_self_exe,
             codex_linux_sandbox_exe,
