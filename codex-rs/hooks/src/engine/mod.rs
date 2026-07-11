@@ -8,6 +8,8 @@ use crate::events::compact::PostCompactRequest;
 use crate::events::compact::PreCompactOutcome;
 use crate::events::compact::PreCompactRequest;
 use crate::events::compact::StatelessHookOutcome;
+use crate::events::message_display::DEFAULT_DEBOUNCE_MS;
+use crate::events::message_display::MessageDisplayHandle;
 use crate::events::permission_request::PermissionRequestOutcome;
 use crate::events::permission_request::PermissionRequestRequest;
 use crate::events::post_tool_use::PostToolUseOutcome;
@@ -31,6 +33,7 @@ use codex_protocol::protocol::HookSource;
 use codex_protocol::protocol::HookTrustStatus;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashMap;
+use std::time::Duration;
 
 #[derive(Debug, Clone)]
 pub(crate) struct CommandShell {
@@ -73,8 +76,13 @@ impl ConfiguredHandler {
             codex_protocol::protocol::HookEventName::SubagentStart => "subagent-start",
             codex_protocol::protocol::HookEventName::SubagentStop => "subagent-stop",
             codex_protocol::protocol::HookEventName::Stop => "stop",
+            codex_protocol::protocol::HookEventName::MessageDisplay => "message-display",
         }
     }
+}
+
+fn message_display_debounce_duration(message_display_debounce_ms: Option<u64>) -> Duration {
+    Duration::from_millis(message_display_debounce_ms.unwrap_or(DEFAULT_DEBOUNCE_MS))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -102,6 +110,7 @@ pub(crate) struct ClaudeHooksEngine {
     warnings: Vec<String>,
     shell: CommandShell,
     output_spiller: HookOutputSpiller,
+    message_display_debounce: Duration,
 }
 
 impl ClaudeHooksEngine {
@@ -112,13 +121,16 @@ impl ClaudeHooksEngine {
         plugin_hook_sources: Vec<PluginHookSource>,
         plugin_hook_load_warnings: Vec<String>,
         shell: CommandShell,
+        message_display_debounce_ms: Option<u64>,
     ) -> Self {
+        let message_display_debounce = message_display_debounce_duration(message_display_debounce_ms);
         if !enabled {
             return Self {
                 handlers: Vec::new(),
                 warnings: Vec::new(),
                 shell,
                 output_spiller: HookOutputSpiller::new(),
+                message_display_debounce,
             };
         }
 
@@ -134,11 +146,42 @@ impl ClaudeHooksEngine {
             warnings: discovered.warnings,
             shell,
             output_spiller: HookOutputSpiller::new(),
+            message_display_debounce,
         }
     }
 
     pub(crate) fn warnings(&self) -> &[String] {
         &self.warnings
+    }
+
+    /// See [`crate::registry::Hooks::has_message_display_handlers`].
+    pub(crate) fn has_message_display_handlers(&self) -> bool {
+        self.handlers
+            .iter()
+            .any(|handler| handler.event_name == HookEventName::MessageDisplay)
+    }
+
+    /// See [`crate::registry::Hooks::message_display_handle`].
+    pub(crate) fn message_display_handle(
+        &self,
+        session_id: ThreadId,
+        turn_id: String,
+    ) -> Option<MessageDisplayHandle> {
+        let handlers = crate::engine::dispatcher::select_handlers(
+            &self.handlers,
+            HookEventName::MessageDisplay,
+            /*matcher_input*/ None,
+        );
+        if handlers.is_empty() {
+            return None;
+        }
+        Some(MessageDisplayHandle::new(
+            handlers,
+            self.shell.clone(),
+            session_id,
+            turn_id,
+            self.message_display_debounce,
+        ))
     }
 
     pub(crate) fn preview_session_start(

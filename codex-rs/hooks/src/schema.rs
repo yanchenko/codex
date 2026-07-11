@@ -35,6 +35,7 @@ const SUBAGENT_STOP_INPUT_FIXTURE: &str = "subagent-stop.command.input.schema.js
 const SUBAGENT_STOP_OUTPUT_FIXTURE: &str = "subagent-stop.command.output.schema.json";
 const STOP_INPUT_FIXTURE: &str = "stop.command.input.schema.json";
 const STOP_OUTPUT_FIXTURE: &str = "stop.command.output.schema.json";
+const MESSAGE_DISPLAY_INPUT_FIXTURE: &str = "message-display.command.input.schema.json";
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(transparent)]
@@ -117,6 +118,8 @@ pub(crate) enum HookEventNameWire {
     SubagentStop,
     #[serde(rename = "Stop")]
     Stop,
+    #[serde(rename = "MessageDisplay")]
+    MessageDisplay,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -573,6 +576,29 @@ pub(crate) struct StopCommandInput {
     pub last_assistant_message: NullableString,
 }
 
+/// Wire shape for a `MessageDisplay` hook invocation's stdin JSON payload.
+///
+/// Unlike every other command hook, `MessageDisplay` has no corresponding
+/// output-wire type: it is fire-and-forget (see `hooks/src/legacy_notify.rs`
+/// for the execution precedent) and never parses a decision back from the
+/// child process, so there is nothing to schema-generate for its output.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(rename = "message-display.command.input")]
+pub(crate) struct MessageDisplayCommandInput {
+    pub session_id: String,
+    /// Codex extension: expose the active turn id to internal turn-scoped hooks.
+    pub turn_id: String,
+    pub item_id: String,
+    pub cwd: String,
+    #[schemars(schema_with = "message_display_hook_event_name_schema")]
+    pub hook_event_name: String,
+    /// Cumulative text for this item so far, not a delta.
+    pub displayed_text: String,
+    /// `true` for the last delivery for this `item_id`.
+    pub is_final: bool,
+}
+
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[schemars(rename = "subagent-stop.command.input")]
@@ -678,6 +704,10 @@ pub fn write_schema_fixtures(schema_root: &Path) -> anyhow::Result<()> {
         &generated_dir.join(STOP_OUTPUT_FIXTURE),
         schema_json::<StopCommandOutputWire>()?,
     )?;
+    write_schema(
+        &generated_dir.join(MESSAGE_DISPLAY_INPUT_FIXTURE),
+        schema_json::<MessageDisplayCommandInput>()?,
+    )?;
 
     Ok(())
 }
@@ -773,6 +803,10 @@ fn stop_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {
     string_const_schema("Stop")
 }
 
+fn message_display_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {
+    string_const_schema("MessageDisplay")
+}
+
 fn permission_mode_schema(_gen: &mut SchemaGenerator) -> Schema {
     string_enum_schema(&[
         "default",
@@ -829,6 +863,8 @@ mod tests {
     use super::POST_TOOL_USE_OUTPUT_FIXTURE;
     use super::PRE_COMPACT_INPUT_FIXTURE;
     use super::PRE_COMPACT_OUTPUT_FIXTURE;
+    use super::MESSAGE_DISPLAY_INPUT_FIXTURE;
+    use super::MessageDisplayCommandInput;
     use super::PRE_TOOL_USE_INPUT_FIXTURE;
     use super::PRE_TOOL_USE_OUTPUT_FIXTURE;
     use super::PermissionRequestCommandInput;
@@ -928,6 +964,9 @@ mod tests {
             STOP_OUTPUT_FIXTURE => {
                 include_str!("../schema/generated/stop.command.output.schema.json")
             }
+            MESSAGE_DISPLAY_INPUT_FIXTURE => {
+                include_str!("../schema/generated/message-display.command.input.schema.json")
+            }
             _ => panic!("unexpected fixture name: {name}"),
         }
     }
@@ -977,6 +1016,7 @@ mod tests {
             SUBAGENT_STOP_OUTPUT_FIXTURE,
             STOP_INPUT_FIXTURE,
             STOP_OUTPUT_FIXTURE,
+            MESSAGE_DISPLAY_INPUT_FIXTURE,
         ] {
             let expected = normalize_newlines(expected_fixture(fixture));
             let actual = std::fs::read_to_string(schema_root.join("generated").join(fixture))
@@ -1059,6 +1099,11 @@ mod tests {
             &schema_json::<StopCommandInput>().expect("serialize stop input schema"),
         )
         .expect("parse stop input schema");
+        let message_display: Value = serde_json::from_slice(
+            &schema_json::<MessageDisplayCommandInput>()
+                .expect("serialize message display input schema"),
+        )
+        .expect("parse message display input schema");
 
         for schema in [
             &pre_tool_use,
@@ -1070,6 +1115,7 @@ mod tests {
             &subagent_start,
             &subagent_stop,
             &stop,
+            &message_display,
         ] {
             assert_eq!(schema["properties"]["turn_id"]["type"], "string");
             assert!(
