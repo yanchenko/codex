@@ -739,6 +739,7 @@ fn event_label(event_name: HookEventName) -> &'static str {
         HookEventName::SubagentStart => "SubagentStart",
         HookEventName::SubagentStop => "SubagentStop",
         HookEventName::Stop => "Stop",
+        HookEventName::MessageDisplay => "MessageDisplay",
     }
 }
 
@@ -754,6 +755,7 @@ fn event_description(event_name: HookEventName) -> &'static str {
         HookEventName::SubagentStart => "When a subagent is created",
         HookEventName::SubagentStop => "Right before a subagent ends its turn",
         HookEventName::Stop => "Right before Codex ends its turn",
+        HookEventName::MessageDisplay => "As the assistant's reply streams, repeatedly",
     }
 }
 

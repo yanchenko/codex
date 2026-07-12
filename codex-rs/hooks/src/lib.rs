@@ -16,7 +16,7 @@ pub use declarations::plugin_hook_declarations;
 pub use engine::HookListEntry;
 pub use events::common::SubagentHookContext;
 /// Hook event names as they appear in hooks JSON and config files.
-pub const HOOK_EVENT_NAMES: [&str; 10] = [
+pub const HOOK_EVENT_NAMES: [&str; 11] = [
     "PreToolUse",
     "PermissionRequest",
     "PostToolUse",
@@ -27,6 +27,7 @@ pub const HOOK_EVENT_NAMES: [&str; 10] = [
     "SubagentStart",
     "SubagentStop",
     "Stop",
+    "MessageDisplay",
 ];
 
 /// Hook event names whose matcher fields are meaningful during dispatch.
@@ -49,6 +50,7 @@ pub use events::compact::PostCompactRequest;
 pub use events::compact::PreCompactOutcome;
 pub use events::compact::PreCompactRequest;
 pub use events::compact::StatelessHookOutcome;
+pub use events::message_display::MessageDisplayHandle;
 pub use events::permission_request::PermissionRequestDecision;
 pub use events::permission_request::PermissionRequestOutcome;
 pub use events::permission_request::PermissionRequestRequest;
@@ -93,6 +95,7 @@ pub fn hook_event_key_label(event_name: HookEventName) -> &'static str {
         HookEventName::SubagentStart => "subagent_start",
         HookEventName::SubagentStop => "subagent_stop",
         HookEventName::Stop => "stop",
+        HookEventName::MessageDisplay => "message_display",
     }
 }
 

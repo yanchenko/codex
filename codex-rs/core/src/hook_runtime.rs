@@ -707,6 +707,7 @@ fn hook_run_metric_tags(run: &HookRunSummary) -> [(&'static str, &'static str); 
         HookEventName::SubagentStart => "SubagentStart",
         HookEventName::SubagentStop => "SubagentStop",
         HookEventName::Stop => "Stop",
+        HookEventName::MessageDisplay => "MessageDisplay",
     };
     let hook_source = match run.source {
         HookSource::System => "system",

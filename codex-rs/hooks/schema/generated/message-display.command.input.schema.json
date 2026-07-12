@@ -1,0 +1,43 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "description": "Wire shape for a `MessageDisplay` hook invocation's stdin JSON payload.\n\nUnlike every other command hook, `MessageDisplay` has no corresponding output-wire type: it is fire-and-forget (see `hooks/src/legacy_notify.rs` for the execution precedent) and never parses a decision back from the child process, so there is nothing to schema-generate for its output.",
+  "properties": {
+    "cwd": {
+      "type": "string"
+    },
+    "displayed_text": {
+      "description": "Cumulative text for this item so far, not a delta.",
+      "type": "string"
+    },
+    "hook_event_name": {
+      "const": "MessageDisplay",
+      "type": "string"
+    },
+    "is_final": {
+      "description": "`true` for the last delivery for this `item_id`.",
+      "type": "boolean"
+    },
+    "item_id": {
+      "type": "string"
+    },
+    "session_id": {
+      "type": "string"
+    },
+    "turn_id": {
+      "description": "Codex extension: expose the active turn id to internal turn-scoped hooks.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "cwd",
+    "displayed_text",
+    "hook_event_name",
+    "is_final",
+    "item_id",
+    "session_id",
+    "turn_id"
+  ],
+  "title": "message-display.command.input",
+  "type": "object"
+}

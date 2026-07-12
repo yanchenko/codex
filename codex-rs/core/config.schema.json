@@ -1251,6 +1251,13 @@
     },
     "HooksToml": {
       "properties": {
+        "MessageDisplay": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/MatcherGroup"
+          },
+          "type": "array"
+        },
         "PermissionRequest": {
           "default": [],
           "items": {
@@ -1320,6 +1327,12 @@
             "$ref": "#/definitions/MatcherGroup"
           },
           "type": "array"
+        },
+        "message_display_debounce_ms": {
+          "description": "Debounce window, in milliseconds, for `MessageDisplay` hook delivery while an assistant reply is streaming. Defaults to 200ms when unset; a final delivery (`is_final: true`) always bypasses this debounce.",
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
         },
         "state": {
           "additionalProperties": {

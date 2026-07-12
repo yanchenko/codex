@@ -214,6 +214,7 @@ fn append_hook_events(existing: &mut HookEventsToml, incoming: HookEventsToml) -
         subagent_start,
         subagent_stop,
         stop,
+        message_display,
     } = incoming;
 
     let mut changed = false;
@@ -227,6 +228,7 @@ fn append_hook_events(existing: &mut HookEventsToml, incoming: HookEventsToml) -
     changed |= append_vec(&mut existing.subagent_start, subagent_start);
     changed |= append_vec(&mut existing.subagent_stop, subagent_stop);
     changed |= append_vec(&mut existing.stop, stop);
+    changed |= append_vec(&mut existing.message_display, message_display);
     changed
 }
 

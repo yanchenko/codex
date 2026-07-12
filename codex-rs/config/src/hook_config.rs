@@ -22,6 +22,11 @@ pub struct HooksToml {
     pub events: HookEventsToml,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub state: BTreeMap<String, HookStateToml>,
+    /// Debounce window, in milliseconds, for `MessageDisplay` hook delivery
+    /// while an assistant reply is streaming. Defaults to 200ms when unset;
+    /// a final delivery (`is_final: true`) always bypasses this debounce.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message_display_debounce_ms: Option<u64>,
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -54,6 +59,8 @@ pub struct HookEventsToml {
     pub subagent_stop: Vec<MatcherGroup>,
     #[serde(rename = "Stop", default)]
     pub stop: Vec<MatcherGroup>,
+    #[serde(rename = "MessageDisplay", default)]
+    pub message_display: Vec<MatcherGroup>,
 }
 
 impl HookEventsToml {
@@ -69,6 +76,7 @@ impl HookEventsToml {
             subagent_start,
             subagent_stop,
             stop,
+            message_display,
         } = self;
         pre_tool_use.is_empty()
             && permission_request.is_empty()
@@ -80,6 +88,7 @@ impl HookEventsToml {
             && subagent_start.is_empty()
             && subagent_stop.is_empty()
             && stop.is_empty()
+            && message_display.is_empty()
     }
 
     pub fn handler_count(&self) -> usize {
@@ -94,6 +103,7 @@ impl HookEventsToml {
             subagent_start,
             subagent_stop,
             stop,
+            message_display,
         } = self;
         [
             pre_tool_use,
@@ -106,6 +116,7 @@ impl HookEventsToml {
             subagent_start,
             subagent_stop,
             stop,
+            message_display,
         ]
         .into_iter()
         .flatten()
@@ -113,7 +124,7 @@ impl HookEventsToml {
         .sum()
     }
 
-    pub fn into_matcher_groups(self) -> [(HookEventName, Vec<MatcherGroup>); 10] {
+    pub fn into_matcher_groups(self) -> [(HookEventName, Vec<MatcherGroup>); 11] {
         [
             (HookEventName::PreToolUse, self.pre_tool_use),
             (HookEventName::PermissionRequest, self.permission_request),
@@ -125,6 +136,7 @@ impl HookEventsToml {
             (HookEventName::SubagentStart, self.subagent_start),
             (HookEventName::SubagentStop, self.subagent_stop),
             (HookEventName::Stop, self.stop),
+            (HookEventName::MessageDisplay, self.message_display),
         ]
     }
 }

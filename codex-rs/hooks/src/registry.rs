@@ -36,6 +36,9 @@ pub struct HooksConfig {
     pub plugin_hook_load_warnings: Vec<String>,
     pub shell_program: Option<String>,
     pub shell_args: Vec<String>,
+    /// `[hooks] message_display_debounce_ms` from `config.toml`; defaults to
+    /// [`crate::events::message_display::DEFAULT_DEBOUNCE_MS`] when unset.
+    pub message_display_debounce_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -74,6 +77,7 @@ impl Hooks {
                 program: config.shell_program.unwrap_or_default(),
                 args: config.shell_args,
             },
+            config.message_display_debounce_ms,
         );
         Self {
             after_agent,
@@ -202,6 +206,24 @@ impl Hooks {
 
     pub async fn run_stop(&self, request: StopRequest) -> StopOutcome {
         self.engine.run_stop(request).await
+    }
+
+    /// Whether any enabled, trusted `MessageDisplay` handler is configured.
+    /// Callers on the token-streaming hot path (`core/src/session/turn.rs`)
+    /// check this once per turn so that having zero `MessageDisplay` handlers
+    /// costs nothing beyond this one boolean check per streamed delta.
+    pub fn has_message_display_handlers(&self) -> bool {
+        self.engine.has_message_display_handlers()
+    }
+
+    /// Builds a per-turn debounced dispatcher for `MessageDisplay`, or `None`
+    /// if no handlers are configured (see [`Self::has_message_display_handlers`]).
+    pub fn message_display_handle(
+        &self,
+        session_id: codex_protocol::ThreadId,
+        turn_id: String,
+    ) -> Option<crate::events::message_display::MessageDisplayHandle> {
+        self.engine.message_display_handle(session_id, turn_id)
     }
 }
 

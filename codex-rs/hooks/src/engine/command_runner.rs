@@ -161,7 +161,7 @@ fn finish_command_run(
     }
 }
 
-fn build_command(shell: &CommandShell, handler: &ConfiguredHandler) -> Command {
+pub(crate) fn build_command(shell: &CommandShell, handler: &ConfiguredHandler) -> Command {
     let mut command = if shell.program.is_empty() {
         default_shell_command()
     } else {

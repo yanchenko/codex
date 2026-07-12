@@ -10809,7 +10809,8 @@
           "userPromptSubmit",
           "subagentStart",
           "subagentStop",
-          "stop"
+          "stop",
+          "messageDisplay"
         ],
         "type": "string"
       },
@@ -11743,6 +11744,12 @@
       },
       "ManagedHooksRequirements": {
         "properties": {
+          "MessageDisplay": {
+            "items": {
+              "$ref": "#/definitions/v2/ConfiguredHookMatcherGroup"
+            },
+            "type": "array"
+          },
           "PermissionRequest": {
             "items": {
               "$ref": "#/definitions/v2/ConfiguredHookMatcherGroup"
@@ -11817,6 +11824,7 @@
           }
         },
         "required": [
+          "MessageDisplay",
           "PermissionRequest",
           "PostCompact",
           "PostToolUse",
