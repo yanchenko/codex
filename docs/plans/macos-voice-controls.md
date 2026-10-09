@@ -4,11 +4,11 @@ Status: implementation plan only. Source baseline: `4bc83aa5f7ebfec8492bb5747aff
 
 ## Outcome and scope
 
-Provide a macOS menu bar companion for an existing Codex CLI voice session. It controls the microphone and assistant playback independently, shows new completed voice messages received while playback is muted, and stays synchronized with terminal controls. Muting playback must leave the conversation, transcription, and delegated Codex work running.
+Provide a macOS menu bar companion for Codex CLI voice sessions, with optional Caps Lock start/stop and a physical LED indicator, plus independent voice choices for different terminal instances. It controls the microphone and assistant playback independently, shows new completed voice messages received while playback is muted, and stays synchronized with terminal controls. Muting playback must leave the conversation, transcription, and delegated Codex work running.
 
-The first release targets local macOS CLI processes, with a proposed minimum of macOS 13. It is a separate optional app in this repository. It does not capture audio itself, change the Mac's system volume, require an iOS app, or replace the terminal. Remote CLI sessions, global keyboard hooks, automatic launch at login, App Store packaging, and task cancellation controls are outside this first implementation.
+The first release targets local macOS CLI processes, with a proposed minimum of macOS 13. It is a separate optional app in this repository. It does not capture audio itself, change the Mac's system volume, require an iOS app, or replace the terminal. Remote CLI sessions, general global keyboard shortcuts, automatic launch at login, App Store packaging, and task cancellation controls are outside this first implementation. Optional system-wide Caps Lock ownership is separately enabled and permission-gated.
 
-This document proposes interfaces; it does not claim that a companion, control endpoint, or persistent speaker mute already exists.
+This document proposes interfaces; it does not claim that a companion, control endpoint, or persistent speaker mute already exists. Split delivery into two independently reviewable tasks: **A — Caps Lock voice lifecycle/LED and its minimal menu/control foundation first; B — independent voices per session second**. Neither task authorizes implementation through this plan-only PR. The existing icon, independent mute controls and unread counter remain the companion design; the richer counter is not a prerequisite for proving Caps handling, and Task A does not depend on Task B.
 
 ## Findings in the current source
 
@@ -41,13 +41,15 @@ Keep IPC framing/authentication, state reduction, and counting in a self-contain
 
 ## Interface
 
-Use an AppKit `NSStatusItem` with a SwiftUI popover and no persistent Dock window. Proposed app directory: `apps/macos-voice-controls/`, including its Swift package, app bundle metadata, build script, and tests. Use system symbols, ordinary native controls, VoiceOver labels, keyboard focus, and dark/light appearance. The app has no microphone, Accessibility, or Screen Recording permission requirement because Codex continues owning the audio devices and no terminal automation is used.
+Use an AppKit `NSStatusItem` with a SwiftUI popover and no persistent Dock window. Proposed app directory: `apps/macos-voice-controls/`, including its Swift package, app bundle metadata, build script, and tests. Use system symbols, ordinary native controls, VoiceOver labels, keyboard focus, and dark/light appearance. Menu-only controls need no microphone, Accessibility, Input Monitoring, or Screen Recording access because Codex owns audio and no terminal automation is used. Optional Caps Lock interception/physical LED control has separate HID/TCC requirements: verify Input Monitoring and any Accessibility requirement for the selected API, OS and keyboard before enabling it. Do not extend the menu-only permission claim to that feature.
 
 The status item combines a small voice icon with microphone/playback state and a numeric badge capped visually at `99+`. A tooltip and accessibility label state both mute flags in words; state is not conveyed by color alone. With multiple sessions the badge totals unread messages across reachable sessions; the popover lists each count explicitly. Disconnected/unknown is visually distinct from muted.
 
 ```text
 Codex Voice                         Connected
 Session: codex · project-name · …a19c  [choose]
+Voice session          Active       [Stop]
+Voice for next start   Selected      [choose]
 
 Microphone            Listening     [Mute]
 Assistant voice       Muted         [Unmute]
@@ -74,20 +76,72 @@ Refactor terminal toggle handling into absolute `set_microphone_muted(bool)` and
 
 On playback mute, drop pending playback, invalidate in-flight writers, and discard arriving audio while continuing to receive transcripts. On unmute, play only newly arriving eligible audio, with no retained backlog or replay of missed answers. Unmuting mid-answer may reveal its remaining live tail; the UI should not promise a whole new answer. Device changes and reconnects must restore the effective flags before opening the audible/capture path. An acknowledgement means the host has applied its local queue/generation boundary; it cannot retract audio already submitted to OS/hardware buffers.
 
-The Gemini integration is expected to use an external gateway that preserves the native WebRTC helper and TUI audio ownership. In that design both providers share these existing local controls; no PCM transport or provider abstraction refactor is required by this companion. Any future alternate audio path must preserve the same controls and completion contract. The companion must not know about WebRTC, PCM, Opus, provider names, API keys, or provider event schemas. Both provider paths require independent validation; a mock or one-provider pass does not establish the other provider's behavior.
+The Gemini integration is expected to use an external gateway that preserves the native WebRTC helper and TUI audio ownership. In that design both providers share these existing local controls; no PCM transport or provider abstraction refactor is required by this companion. Any future alternate audio path must preserve the same controls and completion contract. The companion receives opaque voice IDs/display names and capabilities from the owner; it does not implement WebRTC, PCM, Opus, provider authentication or provider event schemas. Both provider paths require independent validation; a mock or one-provider pass does not establish the other provider's behavior.
+
+## DontSpeak icon reference
+
+Reuse the speech-state menu bar icon approach and candidate artwork from [DontSpeak at `01cf825b0c9c1c263c36d3b29d46fb405d4c812d`](https://github.com/delllusional/DontSpeak/tree/01cf825b0c9c1c263c36d3b29d46fb405d4c812d). Source inspection of `apps/macos/Sources/DontSpeak/DontSpeakApp.swift` found a bare `Image(nsImage:)` label intended to avoid inflated status-item width, orange recording and purple speaking states, and recording priority during duplex activity. Inspect `assets/menubar-icon.svg` as artwork; retain the MIT copyright/license when copying substantial code or artwork. Keep an accessible duplex description even when recording color wins.
+
+Audit geometry instead of copying constants: `MenuBarIcon` uses a minimum height of 24, a 40:24 pill aspect and 0.88 glyph fill. These may create excess padding or clipping in this companion; that is unverified, not a confirmed defect. Measure actual status-item bounds and glyph insets across menu bar sizes/scaling, with/without badge, against adjacent system icons. Keep a stable footprint across activity/mute/unknown states and verify light/dark appearance and reduced motion. No reused icon has been rendered or visually validated here.
+
+## Task A — Caps Lock lifecycle and physical LED (first)
+
+Recommended default: when no managed voice is active, one Caps Lock press starts native voice for the explicitly selected CLI instance/thread; when any managed voice is active, the next press stops all managed voice sessions. Independent mic/speaker mute remain separate menu controls. Use the TUI's normal lifecycle, never key injection or executor cancellation. Stopping retires voice/audio resources; restarting creates a new voice conversation while the Codex task/thread survives. Measure setup time and context continuity per provider; do not promise an instantaneous toggle, preserved provider-side context, or universal latency figures.
+
+| Alternative | Benefits and tradeoff |
+| --- | --- |
+| Native voice start/stop (recommended) | OFF ends capture/playback and releases the call; ON incurs fresh connection/context setup. Admitted Codex work continues. |
+| Dual mute/unmute | Keeps voice/context warm but continues provider/session activity. Both flags need acknowledgement, and prior independent mute choices must be retained. Only as an explicitly labelled alternative mode. |
+| Selected-session-only OFF | Cannot make a shared dark LED mean all managed voice is off while another instance remains active; not the default LED contract. |
+
+The physical LED represents confirmed aggregate native voice lifecycle, independently of logical uppercase Caps Lock. Lit means at least one managed voice session is active; individual mute flags remain separately visible. Dark means every managed voice session is confirmed stopped, so their mic transmission and assistant playback are off. ON starts only the selected instance, never every microphone. OFF targets all enrolled instances and rechecks for newly active sessions before acknowledging aggregate OFF. Target by instance UUID and explicit owner/thread, never focused terminal title or PID alone. Unmanaged Codex processes and unrelated apps are outside this explicitly labelled contract.
+
+Pending, unreachable and failed states must be visible in the menu. Change the LED only after confirmation; retaining its last state is not proof of current state. If LED write/readback is unsupported or fails, mark the physical indicator unavailable: a dark lamp cannot then be presented as proof of silence. Menu controls remain usable. Reconcile terminal-initiated voice changes through authoritative snapshots. Serialize press transitions, suppress repeats and duplicate edges, and reject stale completions using instance/thread/call generation and operation ID.
+
+DontSpeak's `rust/crates/ds-platform/src/macos/capskey.rs` remaps Caps to No Action and uses raw HID for physical presses; `led.rs` writes the physical Caps LED separately from logical lock state. These are source references, not universal hardware proof. Its `release_caps_key` clears the entire `UserKeyMapping` array: **do not copy that cleanup**. Preserve existing mappings; acquire exclusive Caps ownership only after conflict checks; install only the owned entry; restore/remove only that entry if it remains ours. Preserve concurrent third-party changes. Provide explicit crash/SIGKILL recovery without clearing unrelated mappings.
+
+Treat DontSpeak/other Caps owners as conflicts: refuse concurrent ownership and require explicit handover, without overwriting their mapping or racing LED writes. Keep menu-only mode functional without Caps ownership. Cover built-in/USB/Bluetooth and multiple keyboards, hotplug, sleep/wake, permission loss and recovery. Select exact HID APIs and confirm the proposed macOS minimum only after a focused permission/hardware experiment. This PR installs no remap and changes no system setting.
+
+Task A acceptance, independently of voice selection and the richer unread counter:
+
+- [ ] Permission denial/conflicting owner preserves normal Caps behavior and unrelated remaps; menu-only controls work.
+- [ ] One press starts only the selected voice owner; the next stops all enrolled voices; admitted coding tasks continue.
+- [ ] Pending start, startup failure, partial OFF failure and unreachable instances never display an unverified all-off state.
+- [ ] Applied native state and supported physical LEDs agree after terminal controls, press/release/repeat, hotplug and sleep/wake.
+- [ ] Normal exit and crash recovery restore only the owned mapping and preserve concurrent remaps; DontSpeak coexistence fails safely.
+- [ ] Actual startup latency, voice-context restart and hardware/OS limitations are recorded; icon bounds/padding pass visual QA.
+
+## Task B — independent voices per session (second)
+
+Feasible without changing the coding model or making a shared configuration race. At the pinned baseline, `tui/src/chatwidget/realtime_settings.rs` displays a voice catalog and applies selection to the next conversation; `PersistRealtimeVoiceSelection` persists shared `realtime.voice`. `tui/src/app_server_session/realtime.rs::thread_realtime_start` already accepts a per-start voice. Separate invocations can use process-local configuration overrides; reusing the persisted picker unchanged would instead let windows overwrite the shared default.
+
+Add an in-memory instance/owner voice override through the narrow authenticated IPC: list supported voices, select an opaque voice ID for next start, and report selected versus active voice. Key it by instance UUID and explicit owner identity; retain across that owner's stop/start, discard on process exit. Leave the shared default unchanged unless the user explicitly selects a separate save-default action. A running call keeps its voice. Apply changes next start, or via explicit acknowledged stop/start; do not promise hot swapping. Task B can be tested with menu start/stop and does not depend on Caps ownership, HID permissions or LED hardware.
+
+Keep provider catalogs separate behind the interface. OpenAI's enum/catalog cannot validate arbitrary Gemini voice names. Separate Gemini gateway launches have their own `--voice` setting in the proposed integration, allowing distinct launch voices for terminal windows. Menu changes for subsequent Gemini calls need a bounded adapter metadata/call-configuration seam to advertise/validate its own IDs and accept a per-call override. Until implemented, expose the launch voice as fixed and require explicit gateway relaunch to change it. Do not pass Gemini strings through the OpenAI enum or silently substitute voices. Model/account voice support remains live-provider validation.
+
+Task B acceptance:
+
+- [ ] Two CLI instances use different voices simultaneously, with unchanged executor models and no writes to the shared default.
+- [ ] Selection, active voice and next-start voice remain owner-scoped through stop/start, navigation and PID reuse.
+- [ ] Active-call selection waits for next start or explicit restart; no unsupported hot-swap claim.
+- [ ] Invalid/unavailable provider voice is reported; OpenAI and Gemini IDs/catalogs never cross accidentally.
+- [ ] Separate Gemini launch voices work; a menu override is enabled only after its explicit adapter capability is verified.
+- [ ] Source/config proof is distinguished from actual audible voice differentiation and provider access.
 
 ## Narrow local integration
 
-Add an opt-in `tui.voice_controls.enabled` setting and a small macOS-only listener owned by each TUI process, proposed module `codex-rs/tui/src/voice_control_service.rs`. It sends typed requests into the existing `AppEvent` queue and receives immutable state snapshots. It cannot execute commands, approve tools, read arbitrary files, start tasks, or send arbitrary app-server methods. The companion does not connect directly to the voice-host child pipe or become a second audio owner.
+Add an opt-in `tui.voice_controls.enabled` setting and a small macOS-only listener owned by each TUI process, proposed module `codex-rs/tui/src/voice_control_service.rs`. It sends typed requests into the existing `AppEvent` queue and receives immutable state snapshots. It cannot execute commands, approve tools, read arbitrary files, start coding tasks, or send arbitrary app-server methods. The companion does not connect directly to the voice-host child pipe or become a second audio owner.
 
 Use a versioned, length-prefixed JSON protocol over a per-instance Unix domain socket. The helper pipe's same-build protocol is separate and must not be treated as the public companion contract. Proposed client operations:
 
 - `hello`: authenticate, negotiate protocol version/capabilities, return initial snapshot.
 - `subscribe`: stream revisioned snapshots and liveness; after a gap, fetch a full snapshot.
+- Task A: `startVoice` / `stopVoice` with explicit instance/owner identity, expected generation/revision and idempotent operation ID; aggregate OFF is coordinated across enrolled instances and acknowledged only when all are confirmed stopped. Starting voice does not start a coding task.
+- Task B: `listVoices` / `selectVoiceForNextStart` with owner-scoped opaque voice ID and capability validation; report active and selected voice separately.
 - `setMicrophoneMuted` / `setSpeakerMuted`: instance ID, owner thread ID, call generation, expected revision, request ID, and absolute boolean. Validate the target again on the TUI event loop. Stale revisions return a conflict with current state; never blindly retry an unmute after a conflict.
 - `acknowledgeMessages`: an explicit per-session high-water sequence from a snapshot; messages arriving later stay unread.
 
-Snapshot fields include instance UUID, protocol/build versions, voice owner thread ID, call generation, connection phase, mute intentions and applied state, effective output suppression, work status, unread count, last message sequence, effective shortcut text, and sanitized error code. No audio, SDP, provider credential, transcript text, tool arguments, or filesystem content crosses this socket. The service uses bounded frames (initial proposal 64 KiB), bounded clients/queues, authentication timeout, and heartbeat/EOF handling. Slow subscribers are disconnected and must resnapshot; they cannot block audio controls.
+Snapshot fields include instance UUID, protocol/build versions, voice owner thread ID, call generation, connection phase, start/stop capabilities, provider-supplied voice catalog and active/next-start selection, mute intentions and applied state, effective output suppression, work status, unread count, last message sequence, effective shortcut text, and sanitized error code. No audio, SDP, provider credential, transcript text, tool arguments, or filesystem content crosses this socket. The service uses bounded frames (initial proposal 64 KiB), bounded clients/queues, authentication timeout, and heartbeat/EOF handling. Slow subscribers are disconnected and must resnapshot; they cannot block audio controls.
 
 Discovery uses a dedicated per-user runtime directory, not the repository. Use a short private socket path to respect macOS Unix socket path limits, with an atomically published descriptor in a 0700 directory and 0600 descriptor/socket. Each descriptor contains a random instance UUID, socket location, protocol version, process start identity, and a cryptographically random per-process capability token. The token is never in process arguments, environment diagnostics, telemetry, or logs. Use no-follow/ownership checks on discovery files and verify peer UID; reject replaced/symlinked or foreign-owned paths. Only the owning process removes its own descriptor/socket. Reuse or extract the existing guarded Unix socket helpers after checking their suitability instead of copying unchecked filesystem code.
 
@@ -109,7 +163,7 @@ Stopping voice or switching its owner retains the previous owner's unread journa
 
 ## Implementation sequence and review gates
 
-1. Review this plan's semantics, local IPC trust boundary, counting definition, and source ownership. Record any changes before implementing.
+1. Deliver Task A first: review Caps ownership, lifecycle/LED truth, permission/hardware feasibility and minimal IPC before implementation; then independently review Task B per-session voice capability. Review this plan's local IPC trust boundary, counting definition, and source ownership. Record any changes before implementing.
 2. Introduce authoritative persistent speaker mute and absolute mic/speaker setters in the TUI. Forward existing host acknowledgement through the audio session handle with applied revisions. Cover races, speaker release paths, privacy failures, and retry/device restoration before adding a second UI.
 3. Add the owner-scoped count observer, deduplication, explicit read acknowledgement, lifecycle snapshots, and background-thread routing. Define exact retention/gap behavior in protocol tests.
 4. Implement the opt-in narrow local service and shared protocol fixtures. Review filesystem discovery, authentication, bounded queues, stale-instance rejection, and request target validation independently.
