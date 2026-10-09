@@ -133,6 +133,7 @@ mod copy_input_guard;
 pub(crate) mod custom_terminal;
 mod daybreak;
 mod experimental_features;
+mod managed_voice;
 mod markdown_copy;
 mod permission_discovery;
 mod pets;

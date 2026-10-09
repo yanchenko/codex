@@ -99,13 +99,14 @@ impl RealtimeWebrtcSession {
         selection: AudioDeviceSelection,
     ) -> Result<StartedRealtimeWebrtcSession> {
         let (_, guard) = crate::NativeRetirement::startup();
-        Self::start_tracked(abort, selection, guard)
+        Self::start_tracked(abort, selection, guard, None)
     }
 
     pub fn start_tracked(
         abort: AbortRegistration,
         selection: AudioDeviceSelection,
         guard: crate::NativeStartupGuard,
+        lease: Option<crate::NativeLeaseProof>,
     ) -> Result<StartedRealtimeWebrtcSession> {
         let package = codex_install_context::InstallContext::current()
             .package_layout
@@ -153,6 +154,13 @@ impl RealtimeWebrtcSession {
                         ConnectionError::HelperStartup,
                         VoiceHost::connect_tracked(package, build_commit, retirement).await,
                     )?;
+                    let host = match lease {
+                        Some(proof) => report_failure(
+                            ConnectionError::HelperStartup,
+                            host.acquire_lease_guard(proof).await,
+                        )?,
+                        None => host,
+                    };
                     let host = report_failure(
                         ConnectionError::RuntimeInitialization,
                         host.initialize_runtime().await,

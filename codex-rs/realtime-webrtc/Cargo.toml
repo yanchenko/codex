@@ -22,9 +22,12 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "ti
 tracing = { workspace = true }
 
 [dev-dependencies]
+codex-voice-control = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
 ctor = { workspace = true }
 pretty_assertions = { workspace = true }
+tempfile = { workspace = true }
+uuid = { workspace = true, features = ["v4"] }
 
-[target.'cfg(unix)'.dev-dependencies]
+[target.'cfg(unix)'.dependencies]
 libc = { workspace = true }

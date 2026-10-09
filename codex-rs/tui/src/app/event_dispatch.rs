@@ -2095,12 +2095,18 @@ impl App {
                     self.control_voice(control);
                 }
             }
+            AppEvent::ManagedVoice { thread_id, instance, event } => {
+                if let Some(owner) = self.voice_widget_for_thread(thread_id) {
+                    owner.on_managed_voice_event(instance, event);
+                }
+            }
             AppEvent::RealtimeWebrtcOfferCreated {
                 thread_id,
                 attempt_id,
+                managed_instance,
                 result,
             } => {
-                if let Some(owner) = self.voice_widget_for_thread(thread_id) {
+                if let Some(owner) = self.voice_widget_for_thread(thread_id).filter(|owner| owner.accepts_managed_instance(managed_instance)) {
                     owner.on_realtime_webrtc_offer_created(thread_id, attempt_id, result);
                 } else if let Ok(offer) = result {
                     offer.handle.close();
@@ -2109,9 +2115,10 @@ impl App {
             AppEvent::RealtimeWebrtcConnected {
                 thread_id,
                 attempt_id,
+                managed_instance,
                 result,
             } => {
-                if let Some(owner) = self.voice_widget_for_thread(thread_id) {
+                if let Some(owner) = self.voice_widget_for_thread(thread_id).filter(|owner| owner.accepts_managed_instance(managed_instance)) {
                     owner.on_realtime_webrtc_connected(attempt_id, result);
                 }
             }

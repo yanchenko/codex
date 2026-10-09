@@ -112,6 +112,7 @@ fn run(
     let mut transport: Option<transport::Transport> = None;
     let mut answered = false;
     let mut devices: Option<devices::Devices> = None;
+    let mut lease_acquired = false;
     loop {
         phase.set(HelperExitStage::ControlSequence);
         let message = if let Some(devices) = &mut devices {
@@ -154,6 +155,20 @@ fn run(
                 .map_err(|_| mpsc::RecvTimeoutError::Disconnected)
         };
         let reply = match message {
+            Ok(Message::AcquireLeaseGuard { proof })
+                if !lease_acquired
+                    && runtime.is_none()
+                    && transport.is_none()
+                    && devices.is_none() =>
+            {
+                let guard = proof.acquire()?;
+                // This helper is one process per call. The kernel must release
+                // its shared lease only on actual process death, including error
+                // exits, not when this control loop or an audio actor returns.
+                std::mem::forget(guard);
+                lease_acquired = true;
+                Message::LeaseGuardAcquired {}
+            }
             Ok(Message::InspectAudio {}) => {
                 phase.set(HelperExitStage::InspectAudio);
                 if answered && transport.as_ref().is_none_or(|peer| !*peer.ready.borrow()) {
@@ -246,6 +261,8 @@ fn run(
             Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
             Ok(
                 Message::Hello { .. }
+                | Message::AcquireLeaseGuard { .. }
+                | Message::LeaseGuardAcquired {}
                 | Message::Ready {}
                 | Message::RuntimeReady {}
                 | Message::StartTransport {}

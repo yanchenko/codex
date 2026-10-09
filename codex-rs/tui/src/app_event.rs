@@ -1233,13 +1233,21 @@ pub(crate) enum AppEvent {
     RealtimeWebrtcOfferCreated {
         thread_id: ThreadId,
         attempt_id: u64,
+        managed_instance: Option<uuid::Uuid>,
         result: Result<StartedRealtimeWebrtcSession, String>,
+    },
+
+    ManagedVoice {
+        thread_id: ThreadId,
+        instance: uuid::Uuid,
+        event: crate::managed_voice::Event,
     },
 
     /// Result of establishing the WebRTC connection for an active voice attempt.
     RealtimeWebrtcConnected {
         thread_id: ThreadId,
         attempt_id: u64,
+        managed_instance: Option<uuid::Uuid>,
         result: Result<(), codex_realtime_webrtc::ConnectionError>,
     },
 

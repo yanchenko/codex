@@ -1,5 +1,6 @@
 mod client;
 mod helper_exit;
+mod lease;
 #[cfg(any(target_os = "linux", test))]
 mod linux_alsa;
 mod message_reader;
@@ -10,6 +11,7 @@ mod session;
 pub use client::ConnectionError;
 pub use client::VoiceHost;
 pub use helper_exit::HelperExitStage;
+pub use lease::NativeLeaseProof;
 pub use protocol::AudioControls;
 pub use protocol::AudioDevice;
 pub use protocol::AudioDeviceKind;

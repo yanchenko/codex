@@ -4357,14 +4357,17 @@ dependencies = [
  "codex-install-context",
  "codex-utils-cargo-bin",
  "codex-utils-pty",
+ "codex-voice-control",
  "ctor 0.6.3",
  "futures",
  "libc",
  "pretty_assertions",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -4825,6 +4828,7 @@ dependencies = [
  "codex-utils-sandbox-summary",
  "codex-utils-sleep-inhibitor",
  "codex-utils-string",
+ "codex-voice-control",
  "codex-windows-sandbox",
  "codex-worktree",
  "color-eyre",

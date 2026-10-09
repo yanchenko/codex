@@ -65,6 +65,16 @@ pub struct VoiceHost {
 }
 
 impl VoiceHost {
+    pub async fn acquire_lease_guard(mut self, proof: crate::NativeLeaseProof) -> Result<Self> {
+        self.exchange(
+            Message::AcquireLeaseGuard { proof },
+            Message::LeaseGuardAcquired {},
+            DEADLINE,
+        )
+        .await?;
+        Ok(self)
+    }
+
     /// Open local devices only after answer negotiation. They initially remain muted/suppressed.
     pub async fn open_devices(mut self, selection: AudioDeviceSelection) -> Result<Self> {
         self.exchange(
