@@ -122,6 +122,7 @@ async def test_no_delegation_before_sideband(call):
     assert call.events.empty() and not call.google.sent
     call.attached.set()
     await task
+    await asyncio.sleep(.01)
     assert (await event(call))["type"] == "delegation.created"
 
 
@@ -196,3 +197,24 @@ async def test_malformed_codex_closes_without_sending_execution(call):
         with pytest.raises(ValueError):
             await call.handle_codex(message)
     assert not call.google.sent
+
+
+async def test_cancellation_before_attach_prevents_forwarding(call):
+    call.attached.clear()
+    await call.handle_google({"toolCall": {"functionCalls": [
+        {"id": "early", "name": "delegate_to_codex", "args": {"task": "Inspect"}}]}})
+    await call.handle_google({"toolCallCancellation": {"ids": ["early"]}})
+    call.attached.set()
+    await asyncio.sleep(.01)
+    assert not call.pending_tools and call.events.empty() and not call.google.sent
+
+
+async def test_cancellation_removes_not_yet_written_delegation(call):
+    await call.delegate({"id": "queued", "name": "delegate_to_codex", "args": {"task": "Inspect"}})
+    await call.handle_google({"toolCallCancellation": {"ids": ["queued"]}})
+    socket = FakeGoogle()
+    task = call.spawn(call.pump_events(socket))
+    await asyncio.sleep(.01)
+    assert not socket.sent
+    task.cancel()
+    await asyncio.gather(task, return_exceptions=True)

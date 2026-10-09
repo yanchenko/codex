@@ -93,6 +93,8 @@ class Call:
         self.send_lock = asyncio.Lock()
         self.seen_calls = set()
         self.cancelled_calls = set()
+        self.pending_tools = {}
+        self.pending_tools_task = None
         self.transcripts = {"user": "", "assistant": ""}
         self.capture_started = False
         self.channel = None
@@ -238,11 +240,27 @@ class Call:
             calls = message["toolCall"].get("functionCalls", [])
             if not isinstance(calls, list) or len(calls) > 16:
                 raise ValueError("invalid tool calls")
-            # Never forward execution before the authenticated recipient exists.
+            for call in calls:
+                if self.attached.is_set():
+                    await self.delegate(call)
+                else:
+                    call_id = text_value(call.get("id"), 256)
+                    if len(self.pending_tools) >= 16 and call_id not in self.pending_tools:
+                        raise ValueError("pending delegation limit exceeded")
+                    self.pending_tools.setdefault(call_id, call)
+            # Do not block the receive loop: cancellation can arrive before attach.
+            if self.pending_tools and self.pending_tools_task is None:
+                self.pending_tools_task = self.spawn(self.flush_pending_tools())
+
+    async def flush_pending_tools(self):
+        try:
             async with asyncio.timeout(ATTACH_TIMEOUT):
                 await self.attached.wait()
-            for call in calls:
-                await self.delegate(call)
+            while self.pending_tools:
+                call_id = next(iter(self.pending_tools))
+                await self.delegate(self.pending_tools.pop(call_id))
+        finally:
+            self.pending_tools_task = None
 
     async def delegate(self, call):
         call_id = text_value(call.get("id"), 256)
@@ -334,6 +352,8 @@ class Call:
         while not self.closed:
             event, size = await self.events.get()
             self.event_bytes -= size
+            if event.get("type") == "delegation.created" and event["item"]["id"] in self.cancelled_calls:
+                continue
             async with asyncio.timeout(SEND_TIMEOUT):
                 await socket.send_json(event)
 
@@ -343,6 +363,7 @@ class Call:
             return
         self.closed = True
         self.audio.clear()
+        self.pending_tools.clear()
         self.audio.stop()
         current = asyncio.current_task()
         tasks = [t for t in self.tasks if t is not current]
