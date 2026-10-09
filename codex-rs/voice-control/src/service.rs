@@ -39,9 +39,59 @@ struct Coordinator {
 
 impl Coordinator {
     fn apply(&mut self, operation: Operation) -> Result<()> {
-        let next = self.state.transition(operation)?;
+        let guard = match &operation {
+            Operation::Reserve { call, .. } => Some((
+                call.instance,
+                crate::guard::inspect_held(&self.store.directory, call)?,
+            )),
+            Operation::Retired { call } => {
+                if let Some(lease) = self.state.leases.get(&call.instance) {
+                    let guard = lease
+                        .guard
+                        .as_ref()
+                        .ok_or_else(|| anyhow::anyhow!("lease has no native retirement witness"))?;
+                    ensure!(lease.call == *call, "retirement generation mismatch");
+                    ensure!(
+                        crate::guard::retire_if_unheld(&self.store.directory, call, guard)?,
+                        "native voice guard is still held"
+                    );
+                }
+                None
+            }
+            _ => None,
+        };
+        let mut next = self.state.transition(operation)?;
+        if let Some((instance, identity)) = guard {
+            let lease = next
+                .leases
+                .get_mut(&instance)
+                .ok_or_else(|| anyhow::anyhow!("missing admitted lease"))?;
+            if let Some(previous) = &lease.guard {
+                ensure!(previous == &identity, "reservation guard identity changed");
+            }
+            lease.guard = Some(identity);
+        }
         self.store.persist(&next)?;
         self.state = next;
+        Ok(())
+    }
+
+    fn reconcile(&mut self) -> Result<()> {
+        let retired = self
+            .state
+            .leases
+            .values()
+            .filter_map(|lease| {
+                let identity = lease.guard.as_ref()?;
+                match crate::guard::retire_if_unheld(&self.store.directory, &lease.call, identity) {
+                    Ok(true) => Some(lease.call.clone()),
+                    _ => None, // Missing/replaced/inaccessible is uncertainty, never proof.
+                }
+            })
+            .collect::<Vec<_>>();
+        for call in retired {
+            self.apply(Operation::Retired { call })?;
+        }
         Ok(())
     }
 }
@@ -91,6 +141,9 @@ pub async fn serve(directory: &Path) -> Result<()> {
                 // Persistence failure must keep leases occupied in memory. A
                 // subsequent operation cannot reclaim them without retirement.
                 let _ = coordinator.apply(Operation::Disconnect { instance });
+                if !coordinator.state.leases.contains_key(&instance) {
+                    let _ = coordinator.apply(Operation::Forget { instance });
+                }
             }
         });
     }
@@ -109,6 +162,7 @@ async fn handle(
                 request.version == PROTOCOL_VERSION && request.token == coordinator.store.token,
                 "invalid voice-control handshake"
             );
+            coordinator.reconcile()?;
             let result = (|| -> Result<()> {
                 if let Some(operation) = request.operation {
                     match &operation {
@@ -236,7 +290,19 @@ impl Client {
 pub fn runtime_directory() -> std::path::PathBuf {
     std::env::var_os("CODEX_VOICE_CONTROL_DIR")
         .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| std::env::temp_dir().join("codex-voice-control"))
+        .unwrap_or_else(|| {
+            #[cfg(unix)]
+            {
+                // SAFETY: geteuid has no preconditions; the UID keeps shared /tmp
+                // rendezvous paths distinct without depending on CODEX_HOME.
+                let uid = unsafe { libc::geteuid() };
+                std::env::temp_dir().join(format!("codex-voice-control-{uid}"))
+            }
+            #[cfg(not(unix))]
+            {
+                std::env::temp_dir().join("codex-voice-control")
+            }
+        })
 }
 
 pub async fn connect_or_start(directory: &Path, executable: &Path) -> Result<Client> {
@@ -324,6 +390,8 @@ mod tests {
         let _admin = configure(&directory).await;
         let (mut first, a) = register(&directory).await;
         let (mut second, b) = register(&directory).await;
+        let _guard_a = crate::LeaseGuard::create(&directory, &a).unwrap();
+        let _guard_b = crate::LeaseGuard::create(&directory, &b).unwrap();
         let (one, two) = tokio::join!(
             first.request(Operation::Reserve {
                 call: a.clone(),
@@ -352,6 +420,7 @@ mod tests {
         let task = launch(&directory).await;
         let mut admin = configure(&directory).await;
         let (mut owner, call) = register(&directory).await;
+        let _native_guard = crate::LeaseGuard::create(&directory, &call).unwrap();
         owner
             .request(Operation::Reserve {
                 call: call.clone(),

@@ -42,7 +42,7 @@ pub(crate) fn private_open(path: &Path, create: bool) -> Result<File> {
 }
 
 pub(crate) struct Store {
-    directory: PathBuf,
+    pub(crate) directory: PathBuf,
     pub token: String,
     _lock: File,
 }
@@ -100,11 +100,12 @@ impl Store {
             "coordinator journal exceeds size limit"
         );
         let mut state: Registry = serde_json::from_reader(file)?;
-        state.recover();
+        state.recover()?;
         Ok(state)
     }
 
     pub fn persist(&self, state: &Registry) -> Result<()> {
+        state.validate()?;
         let bytes = serde_json::to_vec(state)?;
         ensure!(
             bytes.len() <= crate::wire::MAX_FRAME - 1024,
@@ -115,7 +116,7 @@ impl Store {
             let mut file = private_open(&temporary, true)?;
             file.write_all(&bytes)?;
             file.sync_all()?;
-            std::fs::rename(&temporary, self.directory.join("state.json"))?;
+            replace_durably(&temporary, &self.directory.join("state.json"))?;
             #[cfg(unix)]
             File::open(&self.directory)?.sync_all()?;
             Ok(())
@@ -124,5 +125,101 @@ impl Store {
             let _ = std::fs::remove_file(temporary);
         }
         result
+    }
+}
+
+#[cfg(not(windows))]
+fn replace_durably(source: &Path, destination: &Path) -> Result<()> {
+    std::fs::rename(source, destination)?;
+    Ok(())
+}
+
+#[cfg(windows)]
+fn replace_durably(source: &Path, destination: &Path) -> Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::MOVEFILE_REPLACE_EXISTING;
+    use windows_sys::Win32::Storage::FileSystem::MOVEFILE_WRITE_THROUGH;
+    use windows_sys::Win32::Storage::FileSystem::MoveFileExW;
+    let source: Vec<u16> = source.as_os_str().encode_wide().chain(Some(0)).collect();
+    let destination: Vec<u16> = destination
+        .as_os_str()
+        .encode_wide()
+        .chain(Some(0))
+        .collect();
+    // SAFETY: both UTF-16 buffers are NUL terminated and remain alive throughout
+    // the synchronous call. The temporary file was flushed before replacement.
+    // Microsoft documents WRITE_THROUGH as waiting for the on-disk move.
+    let result = unsafe {
+        MoveFileExW(
+            source.as_ptr(),
+            destination.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    };
+    ensure!(
+        result != 0,
+        "journal replacement failed: {}",
+        std::io::Error::last_os_error()
+    );
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Call;
+    use crate::Operation;
+    use crate::Phase;
+
+    #[tokio::test]
+    async fn restart_retains_reservations_and_quarantines_exact_generations() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("control");
+        let store = Store::open(&path).await.unwrap();
+        let call = Call {
+            instance: Uuid::new_v4(),
+            owner: "thread".into(),
+            generation: 7,
+        };
+        let mut state = Registry::default()
+            .transition(Operation::Configure {
+                provider: "openai".into(),
+                voices: vec!["ash".into()],
+            })
+            .unwrap();
+        state = state
+            .transition(Operation::Register {
+                instance: call.instance,
+                owner: call.owner.clone(),
+                provider: "openai".into(),
+            })
+            .unwrap();
+        state = state
+            .transition(Operation::Reserve {
+                call: call.clone(),
+                epoch: state.epoch,
+            })
+            .unwrap();
+        store.persist(&state).unwrap();
+        drop(store);
+        let store = Store::open(&path).await.unwrap();
+        let recovered = store.load().unwrap();
+        assert_eq!(recovered.leases[&call.instance].call, call);
+        assert_eq!(recovered.leases[&call.instance].phase, Phase::Unknown);
+        assert!(recovered.stopping);
+        assert!(!recovered.instances[&call.instance].connected);
+        assert!(recovered.epoch > state.epoch);
+    }
+
+    #[tokio::test]
+    async fn corrupt_journal_is_an_error_not_an_empty_registry() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("control");
+        let store = Store::open(&path).await.unwrap();
+        private_open(&path.join("state.json"), true)
+            .unwrap()
+            .write_all(b"{broken")
+            .unwrap();
+        assert!(store.load().is_err());
     }
 }

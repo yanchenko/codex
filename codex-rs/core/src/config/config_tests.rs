@@ -13244,6 +13244,7 @@ version = "v2"
 type = "transcription"
 transport = "webrtc"
 voice = "cedar"
+managed_voice = true
 "#,
     )
     .expect("TOML deserialization should succeed");
@@ -13251,6 +13252,7 @@ voice = "cedar"
     assert_eq!(
         cfg.realtime,
         Some(RealtimeToml {
+            managed_voice: Some(true),
             version: Some(RealtimeWsVersion::V2),
             session_type: Some(RealtimeWsMode::Transcription),
             transport: Some(RealtimeTransport::WebRtc),
@@ -13269,6 +13271,7 @@ voice = "cedar"
     assert_eq!(
         config.realtime,
         RealtimeConfig {
+            managed_voice: true,
             version: RealtimeWsVersion::V2,
             session_type: RealtimeWsMode::Transcription,
             transport: RealtimeTransport::WebRtc,

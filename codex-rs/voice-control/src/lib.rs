@@ -9,3 +9,7 @@ pub use service::Client;
 pub use service::connect_or_start;
 pub use service::runtime_directory;
 pub use service::serve;
+
+mod guard;
+pub use guard::GuardIdentity;
+pub use guard::LeaseGuard;

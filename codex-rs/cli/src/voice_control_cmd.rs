@@ -64,7 +64,9 @@ pub(crate) async fn run(args: VoiceControlCommand) -> anyhow::Result<()> {
             Some(Operation::Configure { provider, voices })
         }
         Command::Bind { instance } => Some(Operation::Bind { instance }),
-        Command::Start => Some(Operation::Start),
+        Command::Start => Some(Operation::Start {
+            epoch: client.snapshot().await?.epoch,
+        }),
         Command::Off => Some(Operation::GlobalOff),
         Command::Stop { instance } => Some(Operation::Stop { instance }),
         Command::Forget { instance } => Some(Operation::Forget { instance }),

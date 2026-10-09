@@ -104,7 +104,7 @@ fn restart_and_disconnect_quarantine_until_actual_retirement() {
             epoch: state.epoch,
         })
         .unwrap();
-    state.recover();
+    state.recover().unwrap();
     assert!(state.confirmed_active);
     assert_eq!(state.leases[&first.instance].phase, Phase::Unknown);
     assert!(
@@ -175,7 +175,9 @@ fn global_off_cancels_queued_start_and_repeated_off_is_safe() {
             instance: first.instance,
         })
         .unwrap();
-    state = state.transition(Operation::Start).unwrap();
+    state = state
+        .transition(Operation::Start { epoch: state.epoch })
+        .unwrap();
     assert!(state.instances[&first.instance].start_requested);
     state = state.transition(Operation::GlobalOff).unwrap();
     assert!(!state.instances[&first.instance].start_requested);
@@ -187,7 +189,11 @@ fn global_off_cancels_queued_start_and_repeated_off_is_safe() {
         })
         .unwrap();
     assert!(state.bound.is_none());
-    assert!(state.transition(Operation::Start).is_err());
+    assert!(
+        state
+            .transition(Operation::Start { epoch: state.epoch })
+            .is_err()
+    );
 }
 #[test]
 fn invalid_pools_fail_without_mutation() {
@@ -207,4 +213,50 @@ fn invalid_pools_fail_without_mutation() {
         );
     }
     assert_eq!(state.pools["openai"].voices, vec!["alloy"]);
+}
+
+#[test]
+fn retired_generation_cannot_replay_after_new_call() {
+    let mut state = setup(&["alloy"]);
+    let first = register(&mut state);
+    reserve(&mut state, &first);
+    state = state
+        .transition(Operation::Retired {
+            call: first.clone(),
+        })
+        .unwrap();
+    assert!(
+        state
+            .transition(Operation::Reserve {
+                call: first.clone(),
+                epoch: state.epoch
+            })
+            .is_err()
+    );
+    let mut next = first.clone();
+    next.generation += 1;
+    reserve(&mut state, &next);
+    assert!(
+        state
+            .transition(Operation::Retired { call: first })
+            .is_err()
+    );
+    assert_eq!(
+        state.leases[&next.instance].call.generation,
+        next.generation
+    );
+}
+
+#[test]
+fn corrupt_journal_cannot_recover_an_empty_pool_or_duplicate_voice() {
+    let mut state = setup(&["alloy", "ash"]);
+    let first = register(&mut state);
+    let second = register(&mut state);
+    reserve(&mut state, &first);
+    reserve(&mut state, &second);
+    let mut duplicate = state.clone();
+    duplicate.leases.get_mut(&second.instance).unwrap().voice = "alloy".into();
+    assert!(duplicate.recover().is_err());
+    state.pools.get_mut("openai").unwrap().voices.clear();
+    assert!(state.recover().is_err());
 }

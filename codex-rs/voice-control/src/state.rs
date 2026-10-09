@@ -38,6 +38,7 @@ pub struct Call {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct Lease {
+    pub guard: Option<crate::GuardIdentity>,
     pub call: Call,
     pub provider: String,
     pub voice: String,
@@ -87,7 +88,9 @@ pub enum Operation {
     Bind {
         instance: Uuid,
     },
-    Start,
+    Start {
+        epoch: u64,
+    },
     GlobalOff,
     Reserve {
         call: Call,
@@ -115,9 +118,16 @@ pub enum Operation {
 impl Registry {
     /// Restart never treats an occupied reservation as available. An existing TUI
     /// must reconnect and reconcile its generation before the voice can be reused.
-    pub fn recover(&mut self) {
-        self.epoch += 1;
-        self.revision += 1;
+    pub fn recover(&mut self) -> Result<()> {
+        self.validate()?;
+        self.epoch = self
+            .epoch
+            .checked_add(1)
+            .ok_or_else(|| anyhow::anyhow!("epoch exhausted"))?;
+        self.revision = self
+            .revision
+            .checked_add(1)
+            .ok_or_else(|| anyhow::anyhow!("revision exhausted"))?;
         for instance in self.instances.values_mut() {
             instance.connected = false;
             instance.start_requested = false;
@@ -127,6 +137,73 @@ impl Registry {
             lease.stop_requested = true;
         }
         self.stopping = !self.leases.is_empty();
+        Ok(())
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        ensure!(
+            self.instances.len() <= MAX_OWNERS
+                && self.leases.len() <= MAX_OWNERS
+                && self.retired.len() <= MAX_OWNERS
+                && self.pools.len() <= 16,
+            "invalid registry bounds"
+        );
+        for (provider, pool) in &self.pools {
+            identifier(provider)?;
+            ensure!(
+                !pool.voices.is_empty()
+                    && pool.voices.len() <= MAX_VOICES
+                    && pool.cursor < pool.voices.len(),
+                "invalid journal voice pool"
+            );
+            let mut unique = BTreeSet::new();
+            for voice in &pool.voices {
+                identifier(voice)?;
+                ensure!(unique.insert(voice), "duplicate journal voice");
+            }
+        }
+        for (id, instance) in &self.instances {
+            identifier(&instance.owner)?;
+            ensure!(
+                *id == instance.id && self.pools.contains_key(&instance.provider),
+                "invalid journal instance"
+            );
+        }
+        let mut occupied = BTreeSet::new();
+        for (id, lease) in &self.leases {
+            let instance = self.instance(*id)?;
+            ensure!(
+                lease.call.instance == *id
+                    && lease.call.owner == instance.owner
+                    && lease.provider == instance.provider
+                    && lease.epoch <= self.epoch,
+                "invalid journal lease identity"
+            );
+            ensure!(
+                lease.call.generation > self.retired.get(id).copied().unwrap_or(0),
+                "retired journal generation"
+            );
+            let pool = self
+                .pools
+                .get(&lease.provider)
+                .ok_or_else(|| anyhow::anyhow!("journal pool missing"))?;
+            ensure!(
+                pool.voices.contains(&lease.voice)
+                    && occupied.insert((&lease.provider, &lease.voice)),
+                "invalid or duplicate journal voice"
+            );
+        }
+        ensure!(
+            self.retired
+                .keys()
+                .all(|id| self.instances.contains_key(id)),
+            "orphaned retirement watermark"
+        );
+        ensure!(
+            self.bound.is_none_or(|id| self.instances.contains_key(&id)),
+            "invalid bound instance"
+        );
+        Ok(())
     }
 
     /// Apply to a copy; the service must durably persist it before publishing a
@@ -176,10 +253,17 @@ impl Registry {
                     "provider pool is not configured"
                 );
                 if let Some(previous) = self.instances.get_mut(&instance) {
-                    ensure!(
-                        previous.owner == owner && previous.provider == provider,
-                        "instance identity cannot be changed"
-                    );
+                    if previous.owner != owner || previous.provider != provider {
+                        ensure!(
+                            !self.leases.contains_key(&instance) && !previous.start_requested,
+                            "cannot rebind an instance with a pending or active call"
+                        );
+                        previous.owner = owner;
+                        previous.provider = provider;
+                        if self.bound == Some(instance) {
+                            self.bound = None;
+                        }
+                    }
                     previous.connected = true;
                 } else {
                     ensure!(self.instances.len() < MAX_OWNERS, "instance limit reached");
@@ -199,7 +283,8 @@ impl Registry {
                 ensure!(self.instance(instance)?.connected, "target is disconnected");
                 self.bound = Some(instance);
             }
-            Operation::Start => {
+            Operation::Start { epoch } => {
+                ensure!(epoch == self.epoch, "stale global-start epoch");
                 ensure!(!self.stopping, "global stop is awaiting native retirement");
                 let id = self
                     .bound
@@ -278,6 +363,7 @@ impl Registry {
                 self.leases.insert(
                     call.instance,
                     Lease {
+                        guard: None,
                         call: call.clone(),
                         provider,
                         voice,

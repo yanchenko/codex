@@ -669,6 +669,9 @@ pub use codex_protocol::protocol::RealtimeVoice;
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct RealtimeConfig {
+    /// Enroll native voice in the local coordinator for unique voice allocation and global stop.
+    #[serde(default)]
+    pub managed_voice: bool,
     pub version: RealtimeWsVersion,
     #[serde(rename = "type")]
     pub session_type: RealtimeWsMode,
@@ -679,6 +682,8 @@ pub struct RealtimeConfig {
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct RealtimeToml {
+    /// Enroll native voice in the local coordinator for unique voice allocation and global stop.
+    pub managed_voice: Option<bool>,
     pub version: Option<RealtimeWsVersion>,
     #[serde(rename = "type")]
     pub session_type: Option<RealtimeWsMode>,
