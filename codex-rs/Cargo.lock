@@ -2545,6 +2545,7 @@ dependencies = [
  "codex-utils-process",
  "codex-utils-pty",
  "codex-utils-redacted-string",
+ "codex-voice-control",
  "codex-websocket-auth",
  "codex-windows-sandbox",
  "crossterm",
@@ -5202,6 +5203,20 @@ version = "0.0.0"
 dependencies = [
  "pretty_assertions",
  "v8",
+]
+
+[[package]]
+name = "codex-voice-control"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "codex-uds",
+ "libc",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]

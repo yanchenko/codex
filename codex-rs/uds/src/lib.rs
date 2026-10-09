@@ -59,6 +59,20 @@ pub struct UnixStream {
 }
 
 impl UnixStream {
+    /// Reject local peers owned by another effective user before exchanging data.
+    #[cfg(unix)]
+    pub fn ensure_current_user_peer(&self) -> IoResult<()> {
+        let peer = self.inner.peer_cred()?;
+        // SAFETY: geteuid has no preconditions or pointer arguments.
+        if peer.uid() != unsafe { libc::geteuid() } {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "socket peer belongs to another user",
+            ));
+        }
+        Ok(())
+    }
+
     /// Requires the Windows peer to belong to the current user, with neither
     /// process elevated. Call before sending any application data.
     #[cfg(windows)]

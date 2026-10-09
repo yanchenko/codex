@@ -78,6 +78,7 @@ mod remote_control_cmd;
 mod sandbox_setup;
 mod sandbox_uninstall;
 mod state_db_recovery;
+mod voice_control_cmd;
 #[cfg(not(windows))]
 mod wsl_paths;
 
@@ -188,6 +189,9 @@ enum Subcommand {
 
     /// Diagnose local Codex installation, config, auth, and runtime health.
     Doctor(DoctorCommand),
+
+    /// Coordinate automatic voice allocation and global voice lifecycle.
+    VoiceControl(voice_control_cmd::VoiceControlCommand),
 
     /// Run commands within a Codex-provided sandbox.
     Sandbox(SandboxCommand),
@@ -1641,6 +1645,14 @@ async fn cli_main(
             )?;
             run_update_command()?;
         }
+        Some(Subcommand::VoiceControl(args)) => {
+            reject_remote_mode_for_subcommand(
+                root_remote.as_deref(),
+                root_remote_auth_token_env.as_deref(),
+                "voice-control",
+            )?;
+            voice_control_cmd::run(args).await?;
+        }
         Some(Subcommand::Doctor(doctor_cli)) => {
             reject_remote_mode_for_subcommand(
                 root_remote.as_deref(),
@@ -2270,6 +2282,7 @@ fn unsupported_subcommand_name_for_strict_config(
             Some(app_server_subcommand_name(app_server.subcommand.as_ref()))
         }
         Some(Subcommand::RemoteControl(remote_control)) => Some(remote_control.subcommand_name()),
+        Some(Subcommand::VoiceControl(_)) => Some("voice-control"),
         Some(Subcommand::Mcp(_)) => Some("mcp"),
         Some(Subcommand::Plugin(_)) => Some("plugin"),
         Some(Subcommand::MigrateRollouts(_)) => Some("migrate-rollouts"),
