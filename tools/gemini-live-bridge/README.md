@@ -53,6 +53,7 @@ WebRTC media is restricted to verified addresses belonging to this machine, with
 - Microphone mute stays native: generated Opus silence preserves transport timing while captured speech is suppressed. The gateway cannot infer the user's mute intent from silence; no synthetic mute notification is claimed.
 - Interruption drops unsent gateway audio and stops old paced output. Audio already queued in the native/OS playback path can have a residual tail; this is not an instantaneous hardware flush guarantee.
 - Provider disconnect, overflow, or expired call requires an explicit new voice session. The local adapter does not replay a failed context/delegation through automatic sideband reconnect. Independently admitted coding tasks are not cancelled.
+- Gemini input transcription may arrive out of order relative to output. Transcript boundaries follow explicit interruption, turn completion, delegation and transcription-finished events; the gateway cannot recover perfect utterance identities when the provider omits them. Live conversation and concurrent typing still require provider testing.
 - Gemini-specific errors, model access, quota and credentials require actual account validation. Local mock/native tests cannot establish live provider or acoustic quality.
 
 ## Validation
