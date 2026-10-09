@@ -155,12 +155,11 @@ pub(crate) fn retire_if_unheld(
         Err(std::fs::TryLockError::Error(error)) => return Err(error.into()),
         Ok(()) => {}
     }
-    let mut record = read_record(&file)?;
-    ensure!(
-        record.nonce == identity.nonce,
-        "voice guard identity mismatch"
-    );
-    record.retired = true;
+    let record = Record {
+        version: 1,
+        nonce: identity.nonce.clone(),
+        retired: true,
+    };
     write_record(&mut file, &record)?;
     Ok(true)
 }
@@ -218,6 +217,19 @@ fn file_identity(file: &File) -> Result<(u64, u64)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn assert_eventually_retired(directory: &Path, call: &Call, identity: &GuardIdentity) {
+        // Parallel process-spawn tests can briefly inherit CLOEXEC descriptors
+        // between fork and exec. Reclamation correctly waits for every holder.
+        for _ in 0..100 {
+            if retire_if_unheld(directory, call, identity).unwrap() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        panic!("voice guard remained held after all expected owners exited");
+    }
+
     #[test]
     fn no_reclaim_until_tui_and_helper_drop_then_late_helper_rejected() {
         let temp = tempfile::tempdir().unwrap();
@@ -234,7 +246,7 @@ mod tests {
         drop(tui);
         assert!(!retire_if_unheld(temp.path(), &call, &identity).unwrap());
         drop(helper);
-        assert!(retire_if_unheld(temp.path(), &call, &identity).unwrap());
+        assert_eventually_retired(temp.path(), &call, &identity);
         assert!(LeaseGuard::attach(&path, &nonce).is_err());
     }
     #[test]
@@ -299,6 +311,26 @@ mod tests {
         assert!(!retire_if_unheld(temp.path(), &call, &identity).unwrap());
         child.kill().unwrap();
         child.wait().unwrap();
-        assert!(retire_if_unheld(temp.path(), &call, &identity).unwrap());
+        assert_eventually_retired(temp.path(), &call, &identity);
+    }
+    #[test]
+    fn partial_tombstone_is_repaired_only_after_original_holders_exit() {
+        let temp = tempfile::tempdir().unwrap();
+        let call = Call {
+            instance: Uuid::new_v4(),
+            owner: "thread".into(),
+            generation: 1,
+        };
+        let guard = LeaseGuard::create(temp.path(), &call).unwrap();
+        let identity = guard.identity().unwrap();
+        let path = guard.path().to_owned();
+        let mut file = private_open(&path, false).unwrap();
+        file.set_len(0).unwrap();
+        file.write_all(b"{partial").unwrap();
+        file.sync_all().unwrap();
+        assert!(!retire_if_unheld(temp.path(), &call, &identity).unwrap());
+        drop(guard);
+        assert_eventually_retired(temp.path(), &call, &identity);
+        assert!(LeaseGuard::attach(&path, &identity.nonce).is_err());
     }
 }

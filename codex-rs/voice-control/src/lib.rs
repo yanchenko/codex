@@ -13,3 +13,7 @@ pub use service::serve;
 mod guard;
 pub use guard::GuardIdentity;
 pub use guard::LeaseGuard;
+
+mod caps;
+pub use caps::CapsCommand;
+pub use caps::caps_command;

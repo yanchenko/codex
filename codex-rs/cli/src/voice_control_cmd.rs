@@ -17,6 +17,8 @@ pub(crate) struct VoiceControlCommand {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Explicit Caps permission, ownership and recovery controls.
+    Caps { #[command(subcommand)] command: Caps },
     /// Run the coordinator without claiming Caps or opening audio devices.
     Serve,
     /// Inspect confirmed calls, reservations, and unknown owners.
@@ -40,17 +42,29 @@ enum Command {
     Forget { instance: Uuid },
 }
 
+#[derive(Debug, Subcommand)]
+enum Caps { Status, Setup, Run, Disable }
+
 pub(crate) async fn run(args: VoiceControlCommand) -> anyhow::Result<()> {
     let directory = args
         .directory
         .unwrap_or_else(codex_voice_control::runtime_directory);
+    if let Command::Caps { command } = args.command {
+        let command = match command {
+            Caps::Status => codex_voice_control::CapsCommand::Status,
+            Caps::Setup => codex_voice_control::CapsCommand::Setup,
+            Caps::Run => codex_voice_control::CapsCommand::Run,
+            Caps::Disable => codex_voice_control::CapsCommand::Disable,
+        };
+        return codex_voice_control::caps_command(&directory, command).await;
+    }
     if matches!(args.command, Command::Serve) {
         return codex_voice_control::serve(&directory).await;
     }
     let mut client =
         codex_voice_control::connect_or_start(&directory, &std::env::current_exe()?).await?;
     let operation = match args.command {
-        Command::Serve => unreachable!(),
+        Command::Serve | Command::Caps { .. } => unreachable!(),
         Command::Status => None,
         Command::Pool { provider, voices } => {
             anyhow::ensure!(
