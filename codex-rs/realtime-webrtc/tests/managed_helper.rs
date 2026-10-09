@@ -1,4 +1,5 @@
 //! Opt-in packaged helper proof. No runtime, transport or audio devices are opened.
+#![allow(clippy::expect_used, clippy::unwrap_used)]
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::PathBuf;
