@@ -478,6 +478,17 @@ impl RealtimeWebsocketWriter {
                     | RealtimeOutboundMessage::SessionContextAppend { .. }
             )
         {
+            let content = match message {
+                RealtimeOutboundMessage::DelegationContextAppend { content, .. }
+                | RealtimeOutboundMessage::SessionContextAppend { content, .. } => content,
+                _ => unreachable!(),
+            };
+            if content.iter().map(|part| part.text.len()).sum::<usize>() > 128 * 1024 {
+                return Err(ApiError::InvalidRequest {
+                    message: "local adapter context text exceeds 128 KiB; shorten the voice result"
+                        .to_owned(),
+                });
+            }
             let payload = serde_json::to_string(message).map_err(|_| ApiError::InvalidRequest {
                 message: "failed to encode local adapter context".to_owned(),
             })?;

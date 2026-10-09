@@ -220,7 +220,7 @@ async fn websocket_discards_all_provider_headers_and_sends_context_atomically() 
         .unwrap();
     assert!(
         connection
-            .send_conversation_item_create("x".repeat(256 * 1024), ConversationTextRole::User)
+            .send_conversation_item_create("x".repeat(128 * 1024 + 1), ConversationTextRole::User)
             .await
             .is_err()
     );

@@ -48,7 +48,7 @@ WebRTC media is restricted to verified addresses belonging to this machine, with
 
 - Gemini receives an immediate function response saying a delegated request was **forwarded** to Codex. This does not claim execution success. The existing TUI sends eligible later results for speech; no second core-owned result path is added.
 - Later speech is not correlated to a final Gemini function-call response because Codex's standalone speech append does not carry the original Gemini call ID. Conversation remains available while admitted Codex work runs.
-- Each adapter context append is a single JSON frame with a 256 KiB serialized limit. An oversized result fails visibly rather than being truncated or guessed complete by a timer. Normal OpenAI V3 chunking is unchanged.
+- Each adapter context append is a single JSON frame with a 128 KiB UTF-8 text limit and a 256 KiB serialized-frame limit. An oversized result fails visibly rather than being truncated or guessed complete by a timer. Normal OpenAI V3 chunking is unchanged.
 - Microphone mute stays native: generated Opus silence preserves transport timing while captured speech is suppressed. The gateway cannot infer the user's mute intent from silence; no synthetic mute notification is claimed.
 - Interruption drops unsent gateway audio and stops old paced output. Audio already queued in the native/OS playback path can have a residual tail; this is not an instantaneous hardware flush guarantee.
 - Provider disconnect, overflow, or expired call requires an explicit new voice session. The local adapter does not replay a failed context/delegation through automatic sideband reconnect. Independently admitted coding tasks are not cancelled.
