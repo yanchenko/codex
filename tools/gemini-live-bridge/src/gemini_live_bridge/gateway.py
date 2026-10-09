@@ -90,6 +90,7 @@ class Call:
         self.event_bytes = 0
         self.tasks = set()
         self.closed = False
+        self.cleanup_task = None
         self.send_lock = asyncio.Lock()
         self.seen_calls = set()
         self.cancelled_calls = set()
@@ -146,9 +147,9 @@ class Call:
             await self.send_google(setup_message(self.bridge.settings, session))
             first = await self.google.receive()
             if first.type not in {aiohttp.WSMsgType.TEXT, aiohttp.WSMsgType.BINARY}:
-                raise ValueError("Gemini setup did not complete")
+                raise RuntimeError("Gemini setup did not complete")
             if "setupComplete" not in json_object(first.data):
-                raise ValueError("Gemini setup did not complete")
+                raise RuntimeError("Gemini setup did not complete")
             await self.peer.setRemoteDescription(RTCSessionDescription(offer, "offer"))
             self.peer.addTrack(self.audio)
             answer = await self.peer.createAnswer()
@@ -222,13 +223,10 @@ class Call:
             await self.finish_transcript("assistant")
         if "inputTranscription" in content:
             await self.transcription("user", content["inputTranscription"])
-        if not interrupted and ("outputTranscription" in content or "modelTurn" in content):
-            # Some models omit transcription.finished. Assistant output is the
-            # next reliable question boundary; waiting for turnComplete merges
-            # questions when the user interrupts the answer.
-            await self.finish_transcript("user")
-            if "outputTranscription" in content:
-                await self.transcription("assistant", content["outputTranscription"])
+        if not interrupted and "outputTranscription" in content:
+            # Input transcription can arrive after assistant audio. Do not infer
+            # a new user turn from output frames; use explicit lifecycle boundaries.
+            await self.transcription("assistant", content["outputTranscription"])
         parts = content.get("modelTurn", {}).get("parts", [])
         if not isinstance(parts, list) or len(parts) > 128:
             raise ValueError("invalid model parts")
@@ -376,19 +374,24 @@ class Call:
                 await socket.send_json(event)
 
     async def close(self):
-        # Set before awaiting; callbacks can call close again while transports close.
-        if self.closed:
-            return
-        self.closed = True
+        # The HTTP handler can be cancelled when a WebSocket disappears. Cleanup
+        # must have its own lifetime, not inherit that caller's cancellation.
+        if self.cleanup_task is None:
+            self.closed = True
+            self.cleanup_task = asyncio.create_task(self.close_resources())
+        # Worker finally blocks must not wait for the cleanup task which is
+        # itself cancelling and reaping those workers.
+        if asyncio.current_task() not in self.tasks:
+            await asyncio.shield(self.cleanup_task)
+
+    async def close_resources(self):
         self.audio.clear()
         self.pending_tools.clear()
         self.quiet_context = ""
         self.audio.stop()
-        current = asyncio.current_task()
-        tasks = [t for t in self.tasks if t is not current]
+        tasks = list(self.tasks)
         for task in tasks:
             task.cancel()
-        self.bridge.calls.pop(self.id, None)
         closing = [self.peer.close()]
         if self.google is not None:
             closing.append(self.google.close())
@@ -402,6 +405,7 @@ class Call:
         finally:
             if tasks:
                 await asyncio.gather(*tasks, return_exceptions=True)
+            self.bridge.calls.pop(self.id, None)
 
 
 class Bridge:
@@ -480,7 +484,7 @@ class Bridge:
             raise web.HTTPNotFound(text="voice call unavailable")
         if call.sideband is not None:
             raise web.HTTPConflict(text="voice sideband already attached")
-        socket = web.WebSocketResponse(max_msg_size=MAX_MESSAGE, heartbeat=20)
+        socket = web.WebSocketResponse(max_msg_size=MAX_MESSAGE, heartbeat=20, timeout=1)
         call.sideband = socket  # reserve before await; no duplicate attach race
         try:
             await socket.prepare(request)

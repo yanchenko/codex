@@ -271,3 +271,22 @@ async def test_deferred_context_bound_and_no_implicit_generation(call):
         await call.handle_codex({"type": "session.context.append", "channel": "speakable",
             "content": [{"type": "input_text", "text": "result"}]})
     assert not call.google.sent
+
+
+async def test_delayed_input_transcript_across_audio_does_not_split_question(call):
+    await call.handle_google({"serverContent": {"inputTranscription": {"text": "First "}}})
+    await call.handle_google({"serverContent": {"modelTurn": {"parts": []},
+        "outputTranscription": {"text": "Answer"}}})
+    await call.handle_google({"serverContent": {"inputTranscription": {"text": "question"}}})
+    await call.handle_google({"serverContent": {"modelTurn": {"parts": []}}})
+    assert call.transcripts["user"] == "First question"
+    before = []
+    while not call.events.empty():
+        before.append(await event(call))
+    assert all(e["type"] != "turn.done" for e in before)
+    await call.handle_google({"serverContent": {"interrupted": True}})
+    assert (await event(call))["turn"] == {"role": "user", "transcript": "First question"}
+    assert (await event(call))["turn"] == {"role": "assistant", "transcript": "Answer"}
+    await call.handle_google({"serverContent": {"inputTranscription": {"text": "Second question"}, "turnComplete": True}})
+    assert (await event(call))["item"]["text"] == "Second question"
+    assert (await event(call))["turn"]["transcript"] == "Second question"

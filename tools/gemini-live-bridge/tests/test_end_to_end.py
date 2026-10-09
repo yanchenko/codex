@@ -75,7 +75,8 @@ async def read_type(socket, kind):
                 return value
 
 
-async def test_real_peer_mock_google_audio_tools_and_cleanup():
+@pytest.mark.parametrize("ending", ["session.close", "goAway", "sideband", "peer"])
+async def test_real_peer_mock_google_audio_tools_and_cleanup(ending):
     install_local_ice_policy()
     mock = MockGemini()
     async with TestClient(TestServer(mock.app())) as google:
@@ -104,6 +105,9 @@ async def test_real_peer_mock_google_audio_tools_and_cleanup():
                 answer = await response.text()
                 assert "a=setup:passive" in answer
                 sideband = await local.ws_connect(response.headers["Location"], headers={"Authorization": "Bearer " + NONCE})
+                with pytest.raises(aiohttp.WSServerHandshakeError) as duplicate:
+                    await local.ws_connect(response.headers["Location"], headers={"Authorization": "Bearer " + NONCE})
+                assert duplicate.value.status == 409
                 await peer.setRemoteDescription(RTCSessionDescription(answer, "answer"))
                 await until(lambda: channel.readyState == "open")
                 await read_type(sideband, "session.started")
@@ -136,10 +140,18 @@ async def test_real_peer_mock_google_audio_tools_and_cleanup():
                 await mock.socket.send_json({"serverContent": {"interrupted": True}})
                 await until(lambda: call.audio.generation == 1)
                 assert call.audio.queued == 0
-                await sideband.send_json({"type": "session.close"})
+                if ending == "session.close":
+                    await sideband.send_json({"type": "session.close"})
+                elif ending == "goAway":
+                    await mock.socket.send_json({"goAway": {"timeLeft": "0s"}})
+                elif ending == "sideband":
+                    await sideband.close()
+                else:
+                    await peer.close()
                 await until(lambda: not bridge.calls)
                 await sideband.close()
                 assert call.closed
+                await until(lambda: call.peer.connectionState == "closed")
             finally:
                 await peer.close()
 
