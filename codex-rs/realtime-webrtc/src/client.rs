@@ -171,6 +171,30 @@ impl VoiceHost {
     }
 
     pub async fn connect(package: &CodexPackageLayout, build_commit: &str) -> Result<Self> {
+        Self::connect_inner(package, build_commit, None).await
+    }
+
+    pub(crate) async fn connect_tracked(
+        package: CodexPackageLayout,
+        build_commit: String,
+        retirement: crate::NativeRetirement,
+    ) -> Result<Self> {
+        let worker = retirement.worker();
+        // Do not cancel process creation halfway through its platform spawn path.
+        // If our caller disappears, this task still owns startup and drops the
+        // returned host; the independent exit observer survives both actors.
+        tokio::spawn(async move {
+            let _worker = worker;
+            Self::connect_inner(&package, &build_commit, Some(retirement)).await
+        })
+        .await?
+    }
+
+    async fn connect_inner(
+        package: &CodexPackageLayout,
+        build_commit: &str,
+        retirement: Option<crate::NativeRetirement>,
+    ) -> Result<Self> {
         let root = package.package_dir.as_path().canonicalize()?;
         let name = if cfg!(windows) {
             "codex-voice-host.exe"
@@ -207,6 +231,10 @@ impl VoiceHost {
             &[],
         )
         .await?;
+        let exit_rx = match retirement {
+            Some(retirement) => retirement.observe_child(exit_rx),
+            None => exit_rx,
+        };
         drop(stderr_rx); // Drain and discard diagnostics rather than logging untyped child output.
         let mut host = Self {
             process: session,

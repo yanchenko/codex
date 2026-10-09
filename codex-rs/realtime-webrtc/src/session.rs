@@ -98,6 +98,15 @@ impl RealtimeWebrtcSession {
         abort: AbortRegistration,
         selection: AudioDeviceSelection,
     ) -> Result<StartedRealtimeWebrtcSession> {
+        let (_, guard) = crate::NativeRetirement::startup();
+        Self::start_tracked(abort, selection, guard)
+    }
+
+    pub fn start_tracked(
+        abort: AbortRegistration,
+        selection: AudioDeviceSelection,
+        guard: crate::NativeStartupGuard,
+    ) -> Result<StartedRealtimeWebrtcSession> {
         let package = codex_install_context::InstallContext::current()
             .package_layout
             .clone()
@@ -137,10 +146,12 @@ impl RealtimeWebrtcSession {
         std::thread::Builder::new()
             .name("voice-session".into())
             .spawn(move || {
+                let retirement = guard.retirement();
+                let _guard = guard;
                 let task = async {
                     let host = report_failure(
                         ConnectionError::HelperStartup,
-                        VoiceHost::connect(&package, &build_commit).await,
+                        VoiceHost::connect_tracked(package, build_commit, retirement).await,
                     )?;
                     let host = report_failure(
                         ConnectionError::RuntimeInitialization,
