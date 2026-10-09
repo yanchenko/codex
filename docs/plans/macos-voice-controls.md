@@ -105,6 +105,8 @@ Exclude user transcripts, whitespace-only items, duplicate completion notificati
 
 Maintain a per-owner journal of sequence numbers and deduplication metadata in the TUI, with an explicit finite retention budget and saturation behavior. Suggested limits: 4,096 recent completed IDs per live session and a saturating count; if a recoverable event gap cannot be reconciled, expose `countUnavailable` instead of inventing an exact number. Do not silently evict IDs while continuing to accept replay from their range. Reconnect must resume from a cursor or resynchronize a snapshot without counting history again. `Mark as read` advances the acknowledged sequence only to the displayed high-water mark. Counts survive companion restarts and speaker unmute, but not TUI process restart. No transcript text needs to be retained by the companion.
 
+Stopping voice or switching its owner retains the previous owner's unread journal as an inactive, read-only entry in the same TUI instance. A new owner receives a separate journal; counts never migrate between owners. Retire an old journal only after explicit acknowledgement/removal, process exit, or a visible retention-limit outcome that marks its count unavailable. `acknowledgeMessages` must validate the instance UUID, original owner ID and displayed sequence high-water mark; it cannot acknowledge the current owner by default when the request names an older one. Inactive entries expose read acknowledgement but no audio controls.
+
 ## Implementation sequence and review gates
 
 1. Review this plan's semantics, local IPC trust boundary, counting definition, and source ownership. Record any changes before implementing.
