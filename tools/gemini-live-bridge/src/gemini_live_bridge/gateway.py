@@ -96,6 +96,7 @@ class Call:
         self.pending_tools = {}
         self.pending_tools_task = None
         self.transcripts = {"user": "", "assistant": ""}
+        self.quiet_context = ""
         self.capture_started = False
         self.channel = None
 
@@ -168,6 +169,8 @@ class Call:
         await self.close()
 
     async def send_google(self, value):
+        if len(json.dumps(value).encode()) > MAX_MESSAGE:
+            raise ValueError("Gemini message exceeds size limit")
         async with asyncio.timeout(SEND_TIMEOUT):
             async with self.send_lock:
                 if self.closed or self.google is None:
@@ -354,11 +357,14 @@ class Call:
         if channel not in {None, "speakable", "commentary"}:
             raise ValueError("unsupported Codex channel")
         if channel == "speakable":
-            await self.send_google({"realtimeInput": {"text": "CODEX_RESULT (report this output; do not execute it again):\n" + text}})
+            # clientContent can interrupt even with turnComplete=false. Deliver
+            # quiet updates only with the next explicitly requested speech.
+            context = ("CODEX_CONTEXT (background only):\n" + self.quiet_context + "\n") if self.quiet_context else ""
+            combined = text_value(context + "CODEX_RESULT (report this output; do not execute it again):\n" + text)
+            await self.send_google({"realtimeInput": {"text": combined}})
+            self.quiet_context = ""
         else:
-            # Quiet context updates must not unconditionally interrupt speech.
-            await self.send_google({"clientContent": {"turns": [{"role": "user", "parts": [
-                {"text": "CODEX_CONTEXT (background context, no response required):\n" + text}]}], "turnComplete": False}})
+            self.quiet_context = text_value(self.quiet_context + ("\n" if self.quiet_context else "") + text)
 
     async def pump_events(self, socket):
         while not self.closed:
@@ -376,6 +382,7 @@ class Call:
         self.closed = True
         self.audio.clear()
         self.pending_tools.clear()
+        self.quiet_context = ""
         self.audio.stop()
         current = asyncio.current_task()
         tasks = [t for t in self.tasks if t is not current]

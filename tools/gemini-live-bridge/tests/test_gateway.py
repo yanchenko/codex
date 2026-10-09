@@ -139,7 +139,14 @@ async def test_invalid_provider_input_fails_bounded(call, payload):
 async def test_quiet_context_does_not_trigger_response(call):
     await call.handle_codex({"type": "delegation.context.append", "channel": "commentary",
         "content": [{"type": "input_text", "text": "working"}]})
-    assert call.google.sent[-1]["clientContent"]["turnComplete"] is False
+    assert not call.google.sent
+    assert call.quiet_context == "working"
+    await call.handle_codex({"type": "session.context.append", "channel": "speakable",
+        "content": [{"type": "input_text", "text": "Finished"}]})
+    assert len(call.google.sent) == 1
+    assert "working" in call.google.sent[0]["realtimeInput"]["text"]
+    assert call.google.sent[0]["realtimeInput"]["text"].endswith("Finished")
+    assert not call.quiet_context
 
 
 async def test_close_idempotent_cancels_tasks_clears_audio_and_session(call):
@@ -253,3 +260,14 @@ async def test_interrupted_combined_message_preserves_new_question(call):
         if value["type"] == "turn.done":
             done.append(value["turn"]["transcript"])
     assert done == ["Old question", "Old answer tail", "New question", "New answer"]
+
+
+async def test_deferred_context_bound_and_no_implicit_generation(call):
+    from gemini_live_bridge.gateway import MAX_TEXT
+    await call.handle_codex({"type": "session.context.append", "channel": "commentary",
+        "content": [{"type": "input_text", "text": "x" * MAX_TEXT}]})
+    assert not call.google.sent
+    with pytest.raises(ValueError):
+        await call.handle_codex({"type": "session.context.append", "channel": "speakable",
+            "content": [{"type": "input_text", "text": "result"}]})
+    assert not call.google.sent
