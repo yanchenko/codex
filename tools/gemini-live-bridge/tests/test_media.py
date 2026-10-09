@@ -53,3 +53,46 @@ async def test_slow_consumer_does_not_burst_to_catch_up():
     await track.recv()
     assert time.monotonic() - start >= .018
     track.stop()
+
+
+def test_runtime_guard_rejects_nonhost_before_peer_reflexive_learning(monkeypatch):
+    import aioice.ice
+    import gemini_live_bridge.media as media
+    received = []
+    allowed = {"127.0.0.1", "192.0.2.2"}
+    monkeypatch.setattr(media, "local_addresses", lambda: allowed)
+    monkeypatch.setattr(aioice.ice.StunProtocol, "_codex_local_policy", False, raising=False)
+    monkeypatch.setattr(aioice.ice.StunProtocol, "datagram_received", lambda self, data, addr: received.append(addr))
+    monkeypatch.setattr(aioice.ice, "get_host_addresses", lambda *args: [])
+    media.install_local_ice_policy()
+    protocol = object.__new__(aioice.ice.StunProtocol)
+    protocol.datagram_received(b"STUN", ("198.51.100.1", 1234))
+    assert not received
+    protocol.datagram_received(b"STUN", ("192.0.2.2", 1234))
+    assert received == [("192.0.2.2", 1234)]
+    allowed.remove("192.0.2.2")
+    protocol.datagram_received(b"STUN", ("192.0.2.2", 1234))
+    assert len(received) == 1
+    assert aioice.ice.get_host_addresses(True, True) == ["127.0.0.1"]
+
+
+def test_selected_pairs_reject_empty_or_remote():
+    from types import SimpleNamespace as NS
+    from gemini_live_bridge.media import nominated_pairs
+    connection = NS(_nominated={})
+    peer = NS(sctp=NS(transport=NS(transport=NS(_connection=connection))))
+    with pytest.raises(ValueError):
+        nominated_pairs(peer)
+    connection._nominated[1] = NS(local_addr=("127.0.0.1", 2),
+        remote_addr=("198.51.100.1", 3),
+        protocol=NS(transport=NS(get_extra_info=lambda key: ("127.0.0.1", 2))))
+    with pytest.raises(ValueError):
+        nominated_pairs(peer)
+
+
+async def test_stopped_audio_track_raises():
+    from aiortc.mediastreams import MediaStreamError
+    track = PcmTrack()
+    track.stop()
+    with pytest.raises(MediaStreamError):
+        await track.recv()

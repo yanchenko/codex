@@ -14,6 +14,7 @@ import aioice.ice
 import av
 import ifaddr
 from aiortc import AudioStreamTrack
+from aiortc.mediastreams import MediaStreamError
 
 MAX_SDP = 64 * 1024
 MAX_AUDIO_BYTES = 24_000 * 2 * 8  # eight seconds; overflow closes, never drops words
@@ -49,6 +50,9 @@ def install_local_ice_policy():
 def validated_offer(sdp):
     if not isinstance(sdp, str) or not sdp or len(sdp.encode()) > MAX_SDP:
         raise ValueError("invalid SDP size")
+    media = [line.split()[0] for line in sdp.splitlines() if line.startswith("m=")]
+    if sorted(media) != ["m=application", "m=audio"]:
+        raise ValueError("offer requires exactly audio and data channel media")
     allowed = local_addresses()
     result, candidates, accepted = [], 0, 0
     for line in sdp.splitlines():
@@ -123,6 +127,8 @@ class PcmTrack(AudioStreamTrack):
         self.generation += 1
 
     async def recv(self):
+        if self.readyState != "live":
+            raise MediaStreamError
         now = time.monotonic()
         if self.deadline is not None:
             await asyncio.sleep(max(0, self.deadline - now))
