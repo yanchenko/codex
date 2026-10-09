@@ -3951,9 +3951,31 @@
       ],
       "type": "string"
     },
+    "RealtimeLocalAdapterConfig": {
+      "additionalProperties": false,
+      "description": "Opt-in local voice adapter. This does not change the executor model provider.",
+      "properties": {
+        "base_url": {
+          "description": "Exact origin `http://127.0.0.1:<port>`, without a path or query.",
+          "type": "string"
+        },
+        "bearer_token_env": {
+          "description": "Name of the environment variable containing the per-launch adapter nonce.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "base_url",
+        "bearer_token_env"
+      ],
+      "type": "object"
+    },
     "RealtimeToml": {
       "additionalProperties": false,
       "properties": {
+        "local_adapter": {
+          "$ref": "#/definitions/RealtimeLocalAdapterConfig"
+        },
         "transport": {
           "$ref": "#/definitions/RealtimeTransport"
         },
