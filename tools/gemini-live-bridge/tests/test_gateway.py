@@ -218,3 +218,38 @@ async def test_cancellation_removes_not_yet_written_delegation(call):
     assert not socket.sent
     task.cancel()
     await asyncio.gather(task, return_exceptions=True)
+
+
+async def test_interruption_keeps_questions_and_answers_in_separate_turns(call):
+    await call.handle_google({"serverContent": {"inputTranscription": {"text": "Question one"}}})
+    await call.handle_google({"serverContent": {"outputTranscription": {"text": "Answer one, partial"}}})
+    await call.handle_google({"serverContent": {"interrupted": True}})
+    await call.handle_google({"serverContent": {"inputTranscription": {"text": "Question two"}}})
+    await call.handle_google({"serverContent": {"outputTranscription": {"text": "Answer two"}, "turnComplete": True}})
+    events = []
+    while not call.events.empty():
+        events.append(await event(call))
+    assert [e["turn"] for e in events if e["type"] == "turn.done"] == [
+        {"role": "user", "transcript": "Question one"},
+        {"role": "assistant", "transcript": "Answer one, partial"},
+        {"role": "user", "transcript": "Question two"},
+        {"role": "assistant", "transcript": "Answer two"}]
+    first_done = next(i for i, e in enumerate(events) if e.get("turn", {}).get("transcript") == "Question one")
+    second_delta = next(i for i, e in enumerate(events) if e.get("item", {}).get("text") == "Question two")
+    assert first_done < second_delta
+
+
+async def test_interrupted_combined_message_preserves_new_question(call):
+    await call.handle_google({"serverContent": {"inputTranscription": {"text": "Old question"}}})
+    await call.handle_google({"serverContent": {"outputTranscription": {"text": "Old answer"}}})
+    await call.handle_google({"serverContent": {"interrupted": True, "turnComplete": True,
+        "outputTranscription": {"text": " tail"}, "inputTranscription": {"text": "New "}}})
+    assert call.transcripts == {"user": "New ", "assistant": ""}
+    await call.handle_google({"serverContent": {"inputTranscription": {"text": "question"},
+        "outputTranscription": {"text": "New answer"}, "turnComplete": True}})
+    done = []
+    while not call.events.empty():
+        value = await event(call)
+        if value["type"] == "turn.done":
+            done.append(value["turn"]["transcript"])
+    assert done == ["Old question", "Old answer tail", "New question", "New answer"]

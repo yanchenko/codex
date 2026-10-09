@@ -207,14 +207,25 @@ class Call:
         content = message.get("serverContent", {})
         if not isinstance(content, dict):
             raise ValueError("invalid server content")
-        if content.get("interrupted"):
+        interrupted = bool(content.get("interrupted"))
+        if interrupted:
             self.audio.clear()
+            # Seal the previous question BEFORE a new user's interruption text.
+            await self.finish_transcript("user")
+            if "outputTranscription" in content:
+                await self.transcription("assistant", content["outputTranscription"])
             # Native V3 has no flush event. RTP is paced, so only bounded in-flight
             # native playout remains; do not claim instant removal of played audio.
             await self.finish_transcript("assistant")
-        for role, field_name in (("user", "inputTranscription"), ("assistant", "outputTranscription")):
-            if field_name in content:
-                await self.transcription(role, content[field_name])
+        if "inputTranscription" in content:
+            await self.transcription("user", content["inputTranscription"])
+        if not interrupted and ("outputTranscription" in content or "modelTurn" in content):
+            # Some models omit transcription.finished. Assistant output is the
+            # next reliable question boundary; waiting for turnComplete merges
+            # questions when the user interrupts the answer.
+            await self.finish_transcript("user")
+            if "outputTranscription" in content:
+                await self.transcription("assistant", content["outputTranscription"])
         parts = content.get("modelTurn", {}).get("parts", [])
         if not isinstance(parts, list) or len(parts) > 128:
             raise ValueError("invalid model parts")
@@ -226,7 +237,8 @@ class Call:
                 data = base64.b64decode(text_value(inline.get("data"), MAX_MESSAGE), validate=True)
                 self.audio.append(data)
         if content.get("turnComplete"):
-            await self.finish_transcript("user")
+            if not interrupted:
+                await self.finish_transcript("user")
             await self.finish_transcript("assistant")
         if "toolCallCancellation" in message:
             ids = message["toolCallCancellation"].get("ids", [])
