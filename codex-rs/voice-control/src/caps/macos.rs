@@ -10,6 +10,7 @@ use anyhow::Result;
 use anyhow::ensure;
 use serde::Deserialize;
 use serde::Serialize;
+use std::collections::BTreeSet;
 use std::ffi::CString;
 use std::ffi::c_void;
 use std::fs::File;
@@ -61,6 +62,12 @@ unsafe extern "C" {
     fn IOHIDElementGetUsagePage(element: Ref) -> u32;
     fn IOHIDElementGetUsage(element: Ref) -> u32;
     fn IOHIDDeviceConformsTo(device: Ref, page: u32, usage: u32) -> u8;
+    fn IOHIDDeviceGetService(device: Ref) -> u32;
+    fn IORegistryEntryGetRegistryEntryID(entry: u32, id: *mut u64) -> i32;
+    fn IORegistryEntryGetParentEntry(entry: u32, plane: *const i8, parent: *mut u32) -> i32;
+    fn IORegistryEntryIDMatching(id: u64) -> Ref;
+    fn IOServiceGetMatchingService(port: u32, matching: Ref) -> u32;
+    fn IOObjectRelease(object: u32) -> i32;
     fn IOHIDDeviceCopyMatchingElements(device: Ref, matching: Ref, options: u32) -> Ref;
     fn IOHIDValueCreateWithIntegerValue(
         allocator: Ref,
@@ -167,10 +174,87 @@ fn is_caps(entry: Ref, source: Ref) -> bool {
     }
 }
 
+fn boot_identity() -> Result<String> {
+    let mut bytes = [0u8; 128];
+    let mut size = bytes.len();
+    // SAFETY: bounded writable buffer and a static NUL-terminated sysctl name.
+    ensure!(
+        unsafe {
+            libc::sysctlbyname(
+                c"kern.bootsessionuuid".as_ptr(),
+                bytes.as_mut_ptr().cast(),
+                &mut size,
+                ptr::null_mut(),
+                0,
+            )
+        } == 0,
+        "macOS boot identity unavailable; cannot safely own keyboard mappings"
+    );
+    ensure!(
+        (2..=bytes.len()).contains(&size),
+        "invalid macOS boot identity"
+    );
+    Ok(std::str::from_utf8(&bytes[..size - 1])?.to_owned())
+}
+
+fn service_descends_from(service_id: u64, device_id: u64) -> bool {
+    // MatchingService consumes the matching dictionary. Each returned registry
+    // entry is released; only a bounded exact ancestry match admits raw input.
+    let matching = unsafe { IORegistryEntryIDMatching(service_id) };
+    if matching.is_null() {
+        return false;
+    }
+    let mut entry = unsafe { IOServiceGetMatchingService(0, matching) };
+    for _ in 0..32 {
+        if entry == 0 {
+            return false;
+        }
+        let mut id = 0;
+        let matched =
+            unsafe { IORegistryEntryGetRegistryEntryID(entry, &mut id) } == 0 && id == device_id;
+        let mut parent = 0;
+        if !matched {
+            unsafe {
+                IORegistryEntryGetParentEntry(entry, c"IOService".as_ptr(), &mut parent);
+            }
+        }
+        unsafe {
+            IOObjectRelease(entry);
+        }
+        if matched {
+            return true;
+        }
+        entry = parent;
+    }
+    if entry != 0 {
+        unsafe {
+            IOObjectRelease(entry);
+        }
+    }
+    false
+}
+
 #[derive(Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Recovery {
+    #[serde(default)]
+    boot: String,
     services: Vec<i64>,
+}
+
+impl Recovery {
+    fn bind_boot(&mut self, boot: String) -> Result<()> {
+        ensure!(
+            self.services.is_empty() || self.boot == boot,
+            "Caps recovery belongs to a different or unknown boot; refusing to alter keyboard mappings. Inspect existing remaps before explicitly archiving caps-recovery.json"
+        );
+        self.boot = boot;
+        Ok(())
+    }
+
+    fn restored(&mut self, service: i64) {
+        self.services.retain(|saved| *saved != service);
+    }
 }
 
 struct Remaps {
@@ -191,11 +275,12 @@ impl Remaps {
         );
         let mut bytes = Vec::new();
         record.read_to_end(&mut bytes)?;
-        let recovery = if bytes.is_empty() {
+        let mut recovery: Recovery = if bytes.is_empty() {
             Recovery::default()
         } else {
             serde_json::from_slice(&bytes)?
         };
+        recovery.bind_boot(boot_identity()?)?;
         // SAFETY: CreateSimpleClient has no preconditions and does not open input devices.
         Ok(Self {
             client: Owned::new(unsafe { IOHIDEventSystemClientCreateSimpleClient(ptr::null()) })?,
@@ -313,10 +398,10 @@ impl Remaps {
             );
             drop(reread);
             drop(property);
-        }
-        if !acquire {
-            self.recovery.services.clear();
-            self.save()?;
+            if !acquire {
+                self.recovery.restored(id);
+                self.save()?;
+            }
         }
         Ok(keyboards)
     }
@@ -324,6 +409,7 @@ impl Remaps {
 
 struct Callback {
     edges: Edges,
+    owned_devices: BTreeSet<usize>,
     events: mpsc::SyncSender<()>,
     overflow: std::sync::Arc<AtomicBool>,
 }
@@ -343,9 +429,15 @@ extern "C" fn input(context: *mut c_void, result: i32, _sender: Ref, value: Ref)
             return;
         }
         let callback = &mut *context.cast::<Callback>();
-        if callback.edges.update(
-            IOHIDElementGetDevice(element) as usize,
+        let device = IOHIDElementGetDevice(element) as usize;
+        if CGEventSourceFlagsState(0) & 0x10000 != 0 {
+            callback.overflow.store(true, Ordering::Release);
+            return;
+        }
+        if callback.edges.update_owned(
+            device,
             IOHIDValueGetIntegerValue(value) != 0,
+            callback.owned_devices.contains(&device),
         ) && callback.events.try_send(()).is_err()
         {
             callback.overflow.store(true, Ordering::Release);
@@ -357,9 +449,9 @@ extern "C" fn removed(context: *mut c_void, _result: i32, _sender: Ref, device: 
     if !context.is_null() {
         // SAFETY: removal callbacks use the same boxed context and run-loop thread.
         unsafe {
-            (&mut *context.cast::<Callback>())
-                .edges
-                .update(device as usize, false);
+            let callback = &mut *context.cast::<Callback>();
+            callback.owned_devices.remove(&(device as usize));
+            callback.edges.update(device as usize, false);
         }
     }
 }
@@ -380,6 +472,7 @@ impl Monitor {
         let manager = Owned::new(unsafe { IOHIDManagerCreate(ptr::null(), 0) })?;
         let mut callback = Box::new(Callback {
             edges: Edges::default(),
+            owned_devices: BTreeSet::new(),
             events,
             overflow,
         });
@@ -420,6 +513,40 @@ impl Monitor {
         std::thread::sleep(Duration::from_millis(5));
     }
 
+    fn confirm_owned_devices(&mut self, services: &[i64]) -> Result<()> {
+        // Drain pre-ownership input while admission is closed. A new keyboard
+        // cannot act as a voice switch until its remap has been read back.
+        self.callback.owned_devices.clear();
+        self.poll();
+        ensure!(
+            unsafe { CGEventSourceFlagsState(0) } & 0x10000 == 0,
+            "logical Caps changed before ownership was confirmed; disable logical Caps before retrying"
+        );
+        let devices = Owned::new(unsafe { IOHIDManagerCopyDevices(self.manager.0) })?;
+        let count = unsafe { CFSetGetCount(devices.0) };
+        ensure!((0..=256).contains(&count), "unexpected HID device count");
+        let mut values = vec![ptr::null(); count as usize];
+        unsafe { CFSetGetValues(devices.0, values.as_mut_ptr()) };
+        for device in values {
+            let raw = unsafe { IOHIDDeviceGetService(device) };
+            let mut id = 0;
+            if raw == 0 || unsafe { IORegistryEntryGetRegistryEntryID(raw, &mut id) } != 0 {
+                continue;
+            }
+            if services
+                .iter()
+                .any(|service| service_descends_from(*service as u64, id))
+            {
+                self.callback.owned_devices.insert(device as usize);
+            }
+        }
+        ensure!(
+            !self.callback.owned_devices.is_empty(),
+            "no raw keyboard could be matched to a confirmed Caps mapping; refusing unowned input"
+        );
+        Ok(())
+    }
+
     fn set_led(&self, on: bool) -> Result<usize> {
         let devices = Owned::new(unsafe { IOHIDManagerCopyDevices(self.manager.0) })?;
         let count = unsafe { CFSetGetCount(devices.0) };
@@ -428,7 +555,9 @@ impl Monitor {
         unsafe { CFSetGetValues(devices.0, values.as_mut_ptr()) };
         let mut written = 0;
         for device in values {
-            if unsafe { IOHIDDeviceConformsTo(device, 1, 6) } == 0 {
+            if !self.callback.owned_devices.contains(&(device as usize))
+                || unsafe { IOHIDDeviceConformsTo(device, 1, 6) } == 0
+            {
                 continue;
             }
             let raw = unsafe { IOHIDDeviceCopyMatchingElements(device, ptr::null(), 0) };
@@ -508,8 +637,12 @@ pub(super) async fn command(directory: &Path, command: CapsCommand) -> Result<()
                     record.metadata()?.len() <= 32 * 1024,
                     "invalid Caps recovery record"
                 );
-                let recovery: Recovery = serde_json::from_reader(record)?;
-                !recovery.services.is_empty()
+                if record.metadata()?.len() == 0 {
+                    false
+                } else {
+                    let recovery: Recovery = serde_json::from_reader(record)?;
+                    !recovery.services.is_empty()
+                }
             } else {
                 false
             };
@@ -555,6 +688,10 @@ pub(super) async fn command(directory: &Path, command: CapsCommand) -> Result<()
                     if stop.try_exists()? {
                         std::fs::remove_file(stop)?;
                     }
+                    ensure!(
+                        remaps.recovery.services.is_empty(),
+                        "present keyboards restored; detached keyboard recovery remains pending until reconnect"
+                    );
                     println!("Owned Caps mappings restored; voice calls were not stopped.");
                 }
                 Err(std::fs::TryLockError::WouldBlock) => {
@@ -600,7 +737,7 @@ async fn run(directory: &Path, client: &mut Client) -> Result<()> {
     let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     let worker = tokio::task::spawn_blocking(move || -> Result<()> {
         let _lock = lock;
-        let monitor = Monitor::open(events, worker_overflow.clone())?;
+        let mut monitor = Monitor::open(events, worker_overflow.clone())?;
         let mut remaps = Remaps::open(&path)?;
         // A previous hard crash is recovered under the singleton ownership lock.
         remaps.update(false)?;
@@ -614,7 +751,7 @@ async fn run(directory: &Path, client: &mut Client) -> Result<()> {
             while !worker_stop.load(Ordering::Acquire) {
                 ensure!(
                     !worker_overflow.load(Ordering::Acquire),
-                    "Caps event queue overflow; monitor stopped safely"
+                    "Caps input overflow or unexpected logical Caps state; monitor stopped safely"
                 );
                 ensure!(
                     permission() == "granted",
@@ -626,6 +763,7 @@ async fn run(directory: &Path, client: &mut Client) -> Result<()> {
                 }
                 if last_reconcile.elapsed() >= Duration::from_secs(1) {
                     remaps.update(true)?; // Re-enumerate after attach/detach or wake.
+                    monitor.confirm_owned_devices(&remaps.recovery.services)?;
                     monitor.set_led(desired)?;
                     last_reconcile = std::time::Instant::now();
                 }
@@ -678,4 +816,37 @@ async fn run(directory: &Path, client: &mut Client) -> Result<()> {
     stopping.store(true, Ordering::Release);
     let cleanup = worker.await?;
     result.and(cleanup)
+}
+
+#[cfg(test)]
+mod recovery_tests {
+    use super::*;
+
+    #[test]
+    fn stale_boot_or_legacy_record_never_authorizes_mapping_cleanup() {
+        let mut record = Recovery {
+            boot: "previous".into(),
+            services: vec![42],
+        };
+        assert!(record.bind_boot("current".into()).is_err());
+        assert_eq!(record.services, vec![42]);
+        let mut legacy: Recovery = serde_json::from_str(r#"{"services":[42]}"#).unwrap();
+        assert!(legacy.bind_boot("current".into()).is_err());
+        let mut empty = Recovery::default();
+        empty.bind_boot("current".into()).unwrap();
+        assert_eq!(empty.boot, "current");
+    }
+
+    #[test]
+    fn restoring_present_keyboard_preserves_absent_recovery_evidence() {
+        let mut record = Recovery {
+            boot: "current".into(),
+            services: vec![1, 2],
+        };
+        record.restored(1);
+        assert_eq!(record.services, vec![2]);
+        record.bind_boot("current".into()).unwrap();
+        record.restored(2);
+        assert!(record.services.is_empty());
+    }
 }

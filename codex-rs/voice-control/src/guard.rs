@@ -62,7 +62,6 @@ impl LeaseGuard {
                 .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
         }
         let mut file = options.open(&path)?;
-        file.try_lock_shared()?;
         let nonce = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
         write_record(
             &mut file,
@@ -72,6 +71,10 @@ impl LeaseGuard {
                 retired: false,
             },
         )?;
+        // Windows shared locks deny writes even to their holder. Initialize the
+        // create-new file durably before taking the shared lock; no reservation
+        // or helper path has been exposed during this initialization window.
+        file.try_lock_shared()?;
         #[cfg(unix)]
         File::open(directory)?.sync_all()?;
         Ok(Self {
@@ -324,12 +327,12 @@ mod tests {
         let guard = LeaseGuard::create(temp.path(), &call).unwrap();
         let identity = guard.identity().unwrap();
         let path = guard.path().to_owned();
+        assert!(!retire_if_unheld(temp.path(), &call, &identity).unwrap());
+        drop(guard);
         let mut file = private_open(&path, false).unwrap();
         file.set_len(0).unwrap();
         file.write_all(b"{partial").unwrap();
         file.sync_all().unwrap();
-        assert!(!retire_if_unheld(temp.path(), &call, &identity).unwrap());
-        drop(guard);
         assert_eventually_retired(temp.path(), &call, &identity);
         assert!(LeaseGuard::attach(&path, &identity.nonce).is_err());
     }

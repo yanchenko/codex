@@ -33,6 +33,12 @@ struct Edges {
     down: std::collections::BTreeSet<usize>,
 }
 impl Edges {
+    fn update_owned(&mut self, device: usize, down: bool, owned: bool) -> bool {
+        // Remember pre-ownership presses so a held key cannot become a new
+        // voice request when its keyboard is admitted after reconciliation.
+        self.update(device, down) && owned
+    }
+
     fn update(&mut self, device: usize, down: bool) -> bool {
         if down {
             self.down.insert(device)
@@ -46,6 +52,18 @@ impl Edges {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn unowned_or_hotplugged_press_is_not_replayed_after_acquisition() {
+        let mut edges = Edges::default();
+        assert!(!edges.update_owned(1, true, false));
+        assert!(!edges.update_owned(1, true, true));
+        assert!(!edges.update_owned(1, false, true));
+        assert!(edges.update_owned(1, true, true));
+        assert!(!edges.update_owned(2, true, false));
+        assert!(!edges.update_owned(2, false, true));
+        assert!(edges.update_owned(2, true, true));
+    }
+
     #[test]
     fn repeated_or_release_events_do_not_toggle_and_devices_are_independent() {
         let mut edges = Edges::default();
