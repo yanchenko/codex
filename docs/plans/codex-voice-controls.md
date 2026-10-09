@@ -1,0 +1,102 @@
+# Headless Codex voice controls
+
+Status: implementation authorized; this document must receive independent plan review before coding. Codex source baseline: `4bc83aa5f7ebfec8492bb5747affe0fc8433fcad`. No implementation or hardware/provider acceptance is established by this plan.
+
+## Initial deliverables
+
+Extend the Codex CLI codebase with an optional headless coordinator and narrow native voice integration. No top bar, menu app, AppKit, SwiftUI, separate GUI, independent speaker-mute feature, unread counter or artwork is required. Earlier research is isolated in [deferred menu notes](macos-voice-menu-deferred.md).
+
+1. **First priority: automatic voice acquisition/release.** A configurable ordered pool for each provider allocates a currently free voice round-robin on every new managed voice session. Simultaneous sessions cannot share an occupied voice. Exhaustion refuses a new start explicitly. Allocation is independent of foreground-window detection and Caps hardware availability.
+2. **Second priority: global Caps silence through native stop.** ON starts actual native voice in an explicitly selected/bound Codex instance and owner. OFF stops native voice in **all managed local Codex sessions**, including pending starts. Admitted coding tasks continue. The physical LED follows confirmed aggregate voice lifecycle, regardless of whether a change originated from Caps, the terminal or a failure.
+
+ON never implicitly enables all microphones. Stopping voice releases the voice call/audio resources; restarting creates a fresh voice conversation while the coding thread/task survives. Record startup/context behavior per provider without promising instantaneous restart or preserved provider-side conversation state.
+
+## Source evidence and smallest integration seam
+
+| Source | Verified behavior | Required integration |
+| --- | --- | --- |
+| [TUI voice owner](../../codex-rs/tui/src/app/voice_owner.rs) | Audio belongs to the active or parked voice-owning widget; navigation does not define ownership. | Address live instance UUID, explicit owner and call generation; reuse native lifecycle. |
+| [TUI realtime RPC](../../codex-rs/tui/src/app_server_session/realtime.rs) | `thread_realtime_start` carries a per-start voice and SDP; the TUI owns the local helper. | Add admission/per-start override before any managed start; report actual start/end and local resource retirement. |
+| [Voice settings](../../codex-rs/tui/src/chatwidget/realtime_settings.rs) | Picker changes apply next conversation; persistence writes shared `realtime.voice`. | Keep coordinator allocation and instance override separate from shared defaults. |
+| [Keymap tests](../../codex-rs/tui/src/keymap/voice_tests.rs) | Baseline lifecycle defaults to F8 and mic mute to F9; users can remap lifecycle to F9. | Observe actual lifecycle from every effective binding; never equate mic mute with voice OFF. |
+| [Focus stream](../../codex-rs/tui/src/tui/event_stream.rs), [TUI state](../../codex-rs/tui/src/tui.rs) | FocusGained/Lost exist; `terminal_focused` initializes true. | Initial true is not evidence of a unique focused terminal. Explicit CLI binding is the default. |
+| [Plugin manifest](../../codex-rs/plugin/src/manifest.rs), [app-server RPCs](../../codex-rs/app-server-protocol/src/protocol/common.rs) | Plugin resources do not expose native TUI-owner hooks; another app-server client does not control this TUI's audio ownership. | “Extension” describes optional deployment, not an existing zero-patch plugin API. Keep the necessary lifecycle/registration seam small. |
+| [Unix socket transport](../../codex-rs/app-server-transport/src/transport/unix_socket.rs) | Existing guarded socket ownership/path patterns. | Reuse suitable reviewed helpers without exposing the broad app-server API. |
+
+Do not introduce a second audio engine, PCM proxy, synthetic terminal keystrokes, global volume control or model-mediated control. Keep the normal executor/provider and unmanaged CLI behavior unchanged. Existing microphone mute remains unchanged.
+
+## Platform evidence and release boundary
+
+Inspected reference: [DontSpeak `01cf825b0c9c1c263c36d3b29d46fb405d4c812d`](https://github.com/delllusional/DontSpeak/tree/01cf825b0c9c1c263c36d3b29d46fb405d4c812d), MIT. These are actual source implementations, not proof that hardware works on this machine or every OS. Preserve required license/copyright if reusing substantial code.
+
+| Platform | Actual DontSpeak implementation | Limits and initial Codex status |
+| --- | --- | --- |
+| macOS | `rust/crates/ds-platform/src/macos/capskey.rs` uses `hidutil` Caps-to-NoAction remapping; `iohid.rs` receives physical events; `led.rs` writes HID Caps LED elements separately from logical uppercase state. | Initial platform adapter target. Verify headless TCC/Input Monitoring requirements and any Accessibility requirement with selected APIs. Physical behavior, minimum OS, USB/Bluetooth/multiple keyboards and hotplug remain unverified. Never copy cleanup that clears the whole `UserKeyMapping` array. |
+| Windows | `src/windows.rs` installs a `WH_KEYBOARD_LL` suppression hook on a message-pump thread, queues physical edges and unhooks on release. `caps_led` uses per-keyboard class-device access and `IOCTL_KEYBOARD_SET_INDICATORS`, preserving Num/Scroll indicators separately from logical Caps. | Real reference implementation, not a stub. Its LED writes are best effort and silently ignore failures; Codex needs explicit capability/applied/error reporting. Windows adapter/IPC/runtime validation is deferred from the first macOS release; report unsupported, not successful no-op. |
+| Linux | `src/linux.rs` reads physical Caps events through evdev and writes `EV_LED/LED_CAPSL`; selection currently takes the first matching keyboard. `linux/capskey.rs` edits GNOME/KDE XKB settings with ownership markers, or generic X11 `setxkbmap caps:none`. Other Wayland compositors degrade to user configuration; no desktop session is a no-op. | Real implementation with desktop/device permission dependencies, not generic Linux support. GNOME/KDE changes can persist across reboot; cleanup must preserve user/third-party settings and recover owned markers. Linux adapter/IPC/runtime validation is deferred; do not port its fail-open focus logic or claim all Wayland/multiple-keyboard support. |
+
+Shared lifecycle/lease reducers and protocol should be portable and tested independently of hardware. The first release targets local macOS CLI instances; proposed macOS 13 minimum is provisional until the API/build check. Other targets must continue building with an explicit unsupported Caps/coordinator capability where the platform transport is absent. Do not add fake success adapters. Implementing Windows/Linux adapters is a separate, evidence-gated extension, not required to call the initial macOS work complete. A missing local OS/device is a specific validation limitation, never a pass.
+
+## Process and local protocol
+
+Use one optional on-demand Rust coordinator binary or Codex subcommand per user. Participating TUIs register/connect through private authenticated local IPC. No login item, privileged daemon or GUI is required. A singleton lock, process/start identity and protocol handshake prevent two coordinator owners; stale files alone do not prove a prior process dead. The coordinator owns HID/LED, admission epochs, pool cursors and lease registry. Each TUI owns its normal audio helper and provider session.
+
+Expose CLI/configuration for enablement, pool definitions, enroll/register, explicit bind/select ON target, inspect status, start, per-owner stop, global OFF, and release Caps ownership. Default to explicit target selection using live UUID/owner, not window title/PID alone. Process exit invalidates binding. Optional automatic focus routing requires fresh unique per-instance observed focus events, tested across terminals/tabs/tmux, startup, menus, sleep and dropped reports. Ambiguity rejects targeting; failure of this experiment does not block explicit binding or allocation.
+
+Use a versioned bounded protocol over private Unix sockets on macOS. Proposed integration points: isolated protocol/coordinator crates or modules, CLI subcommand wiring, a small TUI service/event adapter, config/schema and tests. Proposed initial frames are at most 64 KiB, with bounded clients/queues and authentication timeout. Discovery descriptors live in a private 0700 per-user runtime directory, with 0600 sockets/files, random instance UUID, process-start identity and per-instance random capability token. Validate ownership, no-follow paths and peer UID. Do not log tokens. This is a same-user trust boundary, not protection against arbitrary malicious code under the same user.
+
+Operations include handshake/capabilities, registration, subscription/full snapshot, start admission/reservation, startVoice, stopVoice, confirmed end, global OFF and status/binding/pool configuration. All mutations carry owner, generation, operation ID, expected revision and admission epoch where applicable. Reject stale targets; duplicate operation IDs are idempotent. Slow subscribers reconnect and resnapshot without blocking voice control. Snapshots report lifecycle, actual active voice, pending reservation, revision/epoch, liveness and sanitized error; no audio, SDP, transcripts, coding commands, approvals or provider credentials cross this control interface.
+
+The exact pull/push ordering must be reviewed before implementation, including avoiding a TUI event-loop deadlock while waiting for its own admission response. Keep state reduction and wire validation independently testable. Enabling managed mode while a voice call already exists must register/reserve its actual voice or refuse enrollment until it stops; never silently double-allocate or interrupt an existing call merely to enroll.
+
+## Admission, global OFF and leases
+
+Every managed start path, including terminal shortcuts and `/voice`, must pass coordinator admission **before** creating a provider call/audio. Each reservation identifies `(instance UUID, owner ID, call generation, operation ID)` and the provider/voice. Scan the configured provider pool from its cursor for the first free supported voice, reserve atomically, then advance the cursor. Explicit preferences also obey free-voice reservation. Empty/invalid/exhausted pools fail with a useful message; never duplicate or cross provider catalogs.
+
+Activate a lease only after confirmed start. Release only after confirmed voice end/local audio retirement, or failed startup known incapable of producing audio. Provider disconnect alone is insufficient if native playback might remain. Loss of contact, process/child uncertainty or timeout retains an unavailable lease until reconciliation proves cleanup. Do not infer safety from PID reuse or a timer. Persist crash-recoverable lease identity and pool configuration/cursor separately, then reconcile surviving TUIs/helpers before new admissions after coordinator restart.
+
+Global OFF closes admission, advances a stop epoch, invalidates previous pending starts and stops all active/starting managed owners. Recheck registry until every admitted participant, including concurrent registrations, has confirmed stopped. Old start acknowledgements cannot revive a stopped epoch. Reject new starts while stopping; after successful global OFF, a later explicit start/ON can open a fresh epoch. Unreachable participants keep state unknown and block a false all-off claim. Already admitted Codex coding work is untouched.
+
+Coordinator loss refuses new managed starts. Existing calls retain actual state and reservations until recovery; a replacement coordinator cannot reallocate uncertain voices. Define normal shutdown to stop/reconcile managed calls before releasing ownership, or return a clear incomplete/unknown result if that cannot be confirmed. Never claim its own process exit proves all voice stopped. Unmanaged processes/unrelated applications are outside global OFF; expose enrollment clearly.
+
+## Caps ownership and LED truth
+
+One physical key-down edge requests a toggle based on coordinator lifecycle, not logical Caps state; ignore repeats and release-only edges. If any voice is active or starting, request global OFF. From confirmed all-off, request ON for the bound owner. Unknown state permits stop/reconcile, never blind ON. Rapid presses are serialized into the same epoch/revision reducer.
+
+The LED reflects confirmed aggregate native lifecycle: lit when at least one managed voice is confirmed active, dark only when all are confirmed stopped. Pending/unknown/errors are explicit in CLI status. A binary LED cannot encode all states: retain last confirmed indication while unknown and expose indicator-unavailable if writes cannot be confirmed; never market dark hardware as a universal proof of silence. Reconcile after every lifecycle origin, including effective F-key binding, `/voice`, provider failure, helper failure, external stop and recovery. Mic mute alone does not extinguish an active-session indicator.
+
+Acquire Caps only after permission/capability/conflict checks and suppression readiness. DontSpeak/other ownership is an explicit conflict, not something to overwrite. On macOS read/merge only the owned remapping entry, preserve every unrelated mapping, and restore/remove only if it is still ours. Keep a recovery record for hard crashes; preserve concurrent third-party changes and never clear all `UserKeyMapping`. No global remap or interruption of the user's running voice is allowed merely to execute automated tests.
+
+LED writes need applied/error reporting rather than DontSpeak's best-effort void API. Inspect the actual HID result/readback capabilities; when physical confirmation is unavailable, report the limitation rather than inventing it. Cover keyboard attach/detach, permission loss, sleep/wake, multiple devices, normal release and crash recovery. Use pure/mock platform tests by default. Actual physical QA requires a safe dedicated session and records unavailable hardware/permission cases.
+
+## Provider voice integration
+
+OpenAI already accepts a per-start voice; use its supported catalog without changing the coding model or shared persistent preference. A running call retains its allocated voice. Changes apply on next admitted start, not hot swap.
+
+Gemini gateway currently has a launch-level `--voice`; different fixed launch values alone do not implement automatic allocation. Add a narrow bounded capability/per-call voice configuration seam after integrating the independently reviewed gateway branch, or explicitly report that provider unsupported until the seam exists. Do not pass arbitrary Gemini voice IDs through the OpenAI enum. Keep provider-specific validation, model/account capability and errors explicit. Provider credentials remain with the original provider client/gateway, never with the coordinator. Actual audible differentiation requires real-provider QA; mocks prove routing and uniqueness only.
+
+## Work sequence and independent reviews
+
+1. Independently review this plan, platform boundary, IPC/trust model and native lifecycle semantics; publish findings and resolve implementation-gating decisions.
+2. Implement portable coordinator reducers, bounded protocol and CLI/config surface; test concurrency, leases, epochs, singleton/recovery and errors without touching system input.
+3. Integrate all TUI native start/stop origins and per-start voice, using actual applied lifecycle. Independently review admission ordering and cleanup races before platform wiring.
+4. Implement macOS Caps/HID/LED adapter behind opt-in capability checks. Preserve normal CLI when disabled; document unsupported platforms and recovery commands.
+5. Run focused build/tests and safe native lifecycle/provider checks, resolve findings, then obtain independent exact-head code review. Authors and reviewers publish substantive PR comments with evidence/limits. No merge or machine-wide activation is implied by implementation authorization.
+
+## Acceptance evidence required
+
+| Scenario | Expected result and verification |
+| --- | --- |
+| Headless startup | CLI configuration/binding works with no menu app installed/running; simultaneous launches elect one coordinator. Check enabled/disabled and unsupported-platform behavior. |
+| Native lifecycle | ON starts only selected owner; OFF ends all managed active/pending voices while coding tasks survive. Observe actual resource end, not merely requested state. |
+| Every origin | Effective lifecycle shortcut (including customized F9), `/voice`, provider/helper errors and external stop update registry/LED and release leases only on confirmed end. Default mic mute F9 is not OFF. |
+| Race barrier | Concurrent start/OFF/register, delayed start ACK, duplicate requests, navigation and owner-generation changes cannot leave a late audible call or stop the wrong owner. |
+| Pool allocation | Simultaneous starts reserve unique supported free voices in deterministic round-robin order; occupied IDs skipped; exhaustion and invalid configuration reject explicitly. |
+| Recovery | Failed start, unreachable owner, CLI/helper/coordinator crash, PID reuse and restart reconcile uncertain leases without premature reuse; stale socket and lock ownership are handled safely. |
+| Existing calls | Managed enrollment handles an already-active voice explicitly without unrequested interruption or double allocation. |
+| IPC | Wrong token/UID, symlink/replaced descriptor, stale revision, oversized/malformed frames, slow client, protocol mismatch and unavailable coordinator fail boundedly without credentials or broad execution access. |
+| Caps safety | Mock tests prove edge/repeat/permission/conflict paths and owned-entry-only cleanup. Real dedicated hardware checks record observed LED, unrelated remap preservation, keyboard variants and sleep/hotplug recovery; unexecuted cases remain unverified. |
+| Provider routing | OpenAI/Gemini tested separately: per-start IDs stay within catalog, fixed active voice, shared defaults unchanged and coding model unaffected. Live model/key absence is a specific QA prerequisite. |
+| Portability | Shared logic builds/tests on available targets; unavailable Windows/Linux runtime checks and adapters are explicitly unsupported/deferred, never passed from source inspection. |
+
+Record exact head, OS/toolchain/provider/device where relevant, expected/observed outcomes and PASS/FAIL/BLOCKED. Investigate failures before labeling them inherited. Successful compile or mocked lifecycle does not establish physical key/LED behavior or live-provider quality.
