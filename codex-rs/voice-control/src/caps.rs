@@ -28,10 +28,12 @@ pub async fn caps_command(directory: &Path, command: CapsCommand) -> Result<()> 
 }
 
 /// A physical edge is a request; only confirmed lifecycle drives the indicator.
+#[cfg(any(target_os = "macos", test))]
 #[derive(Default)]
 struct Edges {
     down: std::collections::BTreeSet<usize>,
 }
+#[cfg(any(target_os = "macos", test))]
 impl Edges {
     fn update_owned(&mut self, device: usize, down: bool, owned: bool) -> bool {
         // Remember pre-ownership presses so a held key cannot become a new
@@ -75,6 +77,7 @@ mod tests {
     }
 }
 
+#[cfg(any(target_os = "macos", test))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Mapping {
     Other,
@@ -82,12 +85,14 @@ enum Mapping {
     ForeignCaps,
 }
 
+#[cfg(any(target_os = "macos", test))]
 struct MappingPlan {
     retain: Vec<usize>,
     append: bool,
     unchanged: bool,
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn mapping_plan(current: &[Mapping], owned: bool, acquire: bool) -> Result<MappingPlan> {
     if acquire {
         let caps = current
