@@ -13251,6 +13251,7 @@ voice = "cedar"
     assert_eq!(
         cfg.realtime,
         Some(RealtimeToml {
+            local_adapter: None,
             version: Some(RealtimeWsVersion::V2),
             session_type: Some(RealtimeWsMode::Transcription),
             transport: Some(RealtimeTransport::WebRtc),
@@ -13269,12 +13270,36 @@ voice = "cedar"
     assert_eq!(
         config.realtime,
         RealtimeConfig {
+            local_adapter: None,
             version: RealtimeWsVersion::V2,
             session_type: RealtimeWsMode::Transcription,
             transport: RealtimeTransport::WebRtc,
             voice: Some(RealtimeVoice::Cedar),
         }
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn realtime_local_adapter_loads_without_changing_executor_provider() -> std::io::Result<()> {
+    let cfg: ConfigToml = toml::from_str(
+        r#"
+[realtime.local_adapter]
+base_url = "http://127.0.0.1:1234"
+bearer_token_env = "LOCAL_VOICE_NONCE"
+"#,
+    )
+    .unwrap();
+    let expected = cfg.realtime.as_ref().unwrap().local_adapter.clone();
+    let codex_home = TempDir::new()?;
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await?;
+    assert_eq!(config.realtime.local_adapter, expected);
+    assert_eq!(config.model_provider_id, "openai");
     Ok(())
 }
 

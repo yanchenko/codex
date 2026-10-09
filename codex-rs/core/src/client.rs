@@ -735,7 +735,19 @@ impl ModelClient {
         session_config: ApiRealtimeSessionConfig,
         mut extra_headers: ApiHeaderMap,
         api_provider_override: Option<ApiProvider>,
+        local_adapter: Option<&codex_api::LocalRealtimeAdapter>,
     ) -> Result<RealtimeWebrtcCallStart> {
+        if let Some(adapter) = local_adapter {
+            let response =
+                Box::pin(adapter.create_call(&self.http_client_factory, sdp, session_config))
+                    .await
+                    .map_err(codex_api::map_api_error)?;
+            return Ok(RealtimeWebrtcCallStart {
+                sdp: response.sdp,
+                call_id: response.call_id,
+                sideband_headers: adapter.headers(),
+            });
+        }
         // Create the media call over HTTP first, then retain matching auth so realtime can attach
         // the server-side control WebSocket to the call id from that HTTP response.
         let client_setup = self

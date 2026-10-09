@@ -540,6 +540,7 @@ struct RealtimeStart {
     backend_reasoning_status: bool,
     codex_response_handoff_channel_prefixes: Option<BTreeMap<String, Vec<String>>>,
     realtime_call_api_provider: Option<ApiProvider>,
+    local_adapter: Option<codex_api::LocalRealtimeAdapter>,
     session_config: RealtimeSessionConfig,
     model_client: ModelClient,
     sdp: Option<String>,
@@ -657,6 +658,7 @@ impl RealtimeConversationManager {
             backend_reasoning_status,
             codex_response_handoff_channel_prefixes,
             realtime_call_api_provider,
+            local_adapter,
             session_config,
             model_client,
             sdp,
@@ -707,6 +709,10 @@ impl RealtimeConversationManager {
             Some(base_url) => client.with_webrtc_sideband_base_url(base_url),
             None => client,
         };
+        let client = match &local_adapter {
+            Some(adapter) => client.with_local_adapter(adapter.clone()),
+            None => client,
+        };
         let transcript_tail_flush = RealtimeTranscriptTailFlush {
             enabled: flush_transcript_tail_on_session_end,
             tx: transcript_tail_tx,
@@ -718,6 +724,7 @@ impl RealtimeConversationManager {
                     session_config.clone(),
                     extra_headers.unwrap_or_default(),
                     realtime_call_api_provider,
+                    local_adapter.as_ref(),
                 )
                 .await?;
             let task = spawn_webrtc_sideband_input_task(RealtimeWebrtcSidebandInputTask {
@@ -1335,6 +1342,7 @@ struct PreparedRealtimeConversationStart {
     realtime_start_instructions: Option<String>,
     realtime_end_instructions: Option<String>,
     realtime_call_api_provider: Option<ApiProvider>,
+    local_adapter: Option<codex_api::LocalRealtimeAdapter>,
     requested_realtime_session_id: Option<String>,
     version: RealtimeWsVersion,
     session_config: RealtimeSessionConfig,
@@ -1345,6 +1353,50 @@ struct PreparedRealtimeConversationStart {
 pub(crate) enum ConfiguredRealtimeVoice {
     Use,
     Ignore,
+}
+
+fn resolve_local_realtime_adapter(
+    config: &crate::config::Config,
+    params: &ConversationStartParams,
+) -> CodexResult<Option<codex_api::LocalRealtimeAdapter>> {
+    let Some(adapter) = &config.realtime.local_adapter else {
+        return Ok(None);
+    };
+    if config.experimental_realtime_ws_base_url.is_some()
+        || config.experimental_realtime_webrtc_call_base_url.is_some()
+    {
+        return Err(CodexErr::InvalidRequest(
+            "local realtime adapter conflicts with legacy realtime URL overrides".to_owned(),
+        ));
+    }
+    if !matches!(
+        params.transport,
+        Some(ConversationStartTransport::Webrtc { .. })
+    ) || params.version != Some(RealtimeWsVersion::V3)
+        || config.realtime.session_type != RealtimeWsMode::Conversational
+    {
+        return Err(CodexErr::InvalidRequest(
+            "local realtime adapter requires a new conversational WebRTC v3 call".to_owned(),
+        ));
+    }
+    let name = &adapter.bearer_token_env;
+    if name.is_empty()
+        || !name.bytes().enumerate().all(|(index, byte)| {
+            byte == b'_' || byte.is_ascii_alphabetic() || (index > 0 && byte.is_ascii_digit())
+        })
+    {
+        return Err(CodexErr::InvalidRequest(
+            "local realtime adapter requires a valid nonce environment variable name".to_owned(),
+        ));
+    }
+    let token = std::env::var(name).map_err(|_| {
+        CodexErr::InvalidRequest(
+            "local realtime adapter nonce environment variable is missing or invalid".to_owned(),
+        )
+    })?;
+    codex_api::LocalRealtimeAdapter::new(&adapter.base_url, &token)
+        .map(Some)
+        .map_err(map_api_error)
 }
 
 async fn prepare_realtime_start(
@@ -1358,7 +1410,12 @@ async fn prepare_realtime_start(
         .auth_manager()
         .unwrap_or_else(|| Arc::clone(&sess.services.auth_manager));
     let config = sess.get_config().await;
-    let (auth, http_client_factory) = match auth_manager.auth_with_http_client_factory().await {
+    let local_adapter = resolve_local_realtime_adapter(&config, &params)?;
+    let (auth, http_client_factory) = match if local_adapter.is_some() {
+        None
+    } else {
+        auth_manager.auth_with_http_client_factory().await
+    } {
         Some((auth, captured_factory)) if auth.is_chatgpt_auth() || auth.is_api_key_auth() => (
             Some(auth),
             config
@@ -1372,7 +1429,10 @@ async fn prepare_realtime_start(
         .transport
         .clone()
         .unwrap_or(ConversationStartTransport::Websocket);
-    let mut api_provider = provider.to_api_provider(Some(AuthMode::ApiKey))?;
+    let mut api_provider = match &local_adapter {
+        Some(adapter) => adapter.provider(),
+        None => provider.to_api_provider(Some(AuthMode::ApiKey))?,
+    };
     let realtime_sideband_base_url = match &transport {
         ConversationStartTransport::ExistingCall {
             sideband_base_url, ..
@@ -1487,6 +1547,7 @@ async fn prepare_realtime_start(
         realtime_start_instructions: params.realtime_start_instructions,
         realtime_end_instructions: params.realtime_end_instructions,
         realtime_call_api_provider,
+        local_adapter,
         requested_realtime_session_id,
         version,
         session_config,
@@ -1712,6 +1773,7 @@ async fn handle_start_inner(
         realtime_start_instructions,
         realtime_end_instructions,
         realtime_call_api_provider,
+        local_adapter,
         requested_realtime_session_id,
         version,
         session_config,
@@ -1740,6 +1802,7 @@ async fn handle_start_inner(
         backend_reasoning_status,
         codex_response_handoff_channel_prefixes,
         realtime_call_api_provider,
+        local_adapter,
         session_config,
         model_client: sess.services.model_client.clone(),
         sdp,
