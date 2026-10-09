@@ -34,6 +34,8 @@ async fn rejected_voice_start_does_not_leave_local_capture_active() -> Result<()
             AppEvent::CodexOp(Op::RealtimeConversationStart {
                 thread_id,
                 offer_sdp: String::from("v=0\r\n").into(),
+                voice: None,
+                managed: None,
             }),
         ))
         .await?;

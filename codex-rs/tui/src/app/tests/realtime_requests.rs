@@ -159,6 +159,8 @@ async fn check_remote_voice_start(
         AppEvent::CodexOp(Op::RealtimeConversationStart {
             thread_id,
             offer_sdp: String::from("v=0\r\n").into(),
+            voice: None,
+            managed: None,
         }),
     ))
     .await?;

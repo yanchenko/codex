@@ -524,4 +524,91 @@ mod tests {
         .unwrap();
         server.abort();
     }
+    #[tokio::test]
+    async fn owner_drop_keeps_reservation_until_delayed_worker_retires() {
+        let (_temp, mut admin, managed, mut events, server) = setup().await;
+        let instance = managed.instance;
+        let (abort, _) = AbortHandle::new_pair();
+        managed.reserve(20, None, abort.clone()).unwrap();
+        let pending_start = admission(&mut events, 20).await.unwrap();
+        drop(managed);
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !abort.is_aborted() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(
+            admin
+                .snapshot()
+                .await
+                .unwrap()
+                .leases
+                .contains_key(&instance)
+        );
+        drop(pending_start);
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while admin
+                .snapshot()
+                .await
+                .unwrap()
+                .instances
+                .contains_key(&instance)
+            {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(admin.snapshot().await.unwrap().leases.is_empty());
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn rejected_external_start_can_be_requested_again_in_same_epoch() {
+        let (_temp, mut admin, managed, mut events, server) = setup().await;
+        let epoch = managed.epoch().unwrap();
+        admin
+            .request(Operation::Bind {
+                instance: managed.instance,
+            })
+            .await
+            .unwrap();
+        for _ in 0..2 {
+            admin.request(Operation::Start { epoch }).await.unwrap();
+            tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    if let Some(AppEvent::ManagedVoice {
+                        event: Event::Start { epoch: received },
+                        ..
+                    }) = events.recv().await
+                    {
+                        assert_eq!(received, epoch);
+                        break;
+                    }
+                }
+            })
+            .await
+            .unwrap();
+            // The UI can reject a start before Reserve, for example in a read-only thread.
+            managed.stop(0);
+            tokio::time::timeout(Duration::from_secs(5), async {
+                while admin.snapshot().await.unwrap().instances[&managed.instance].start_requested {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .unwrap();
+        }
+        drop(managed);
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !admin.snapshot().await.unwrap().instances.is_empty() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        server.abort();
+    }
 }
