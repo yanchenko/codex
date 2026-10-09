@@ -19,16 +19,38 @@ struct Helper {
     child: Child,
     replies: mpsc::Receiver<std::io::Result<Option<Message>>>,
 }
+fn helper_command(path: &std::path::Path) -> Command {
+    let mut command = Command::new(path);
+    command.env_clear();
+    for name in [
+        "PATH",
+        "HOME",
+        "TMPDIR",
+        "TEMP",
+        "TMP",
+        "SystemRoot",
+        "USERPROFILE",
+    ] {
+        if let Some(value) = std::env::var_os(name) {
+            command.env(name, value);
+        }
+    }
+    command.envs(codex_realtime_webrtc::RUNTIME_ENVIRONMENT);
+    command
+}
 impl Helper {
     fn start() -> Self {
         let path = PathBuf::from(
             std::env::var_os("CODEX_VOICE_HOST")
                 .expect("set CODEX_VOICE_HOST to the matching packaged helper"),
         );
-        let version = Command::new(&path).arg("--build-commit").output().unwrap();
+        let version = helper_command(&path)
+            .arg("--build-commit")
+            .output()
+            .unwrap();
         assert!(version.status.success());
         let commit = String::from_utf8(version.stdout).unwrap().trim().to_owned();
-        let mut child = Command::new(path)
+        let mut child = helper_command(&path)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
