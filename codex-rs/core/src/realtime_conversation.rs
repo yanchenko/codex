@@ -1286,10 +1286,10 @@ async fn stop_conversation_state(
     state.realtime_active.store(false, Ordering::Relaxed);
     state.stop_token.cancel();
     let _ = state.input_task.await;
-    if let Some(gateway) = state.gateway.take() {
-        if let Err(error) = gateway.shutdown().await {
-            tracing::warn!(%error, "Gemini gateway retirement was not confirmed");
-        }
+    if let Some(gateway) = state.gateway.take()
+        && let Err(error) = gateway.shutdown().await
+    {
+        tracing::warn!(%error, "Gemini gateway retirement was not confirmed");
     }
 
     if let Some(fanout_task) = state.fanout_task.take() {

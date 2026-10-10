@@ -19,7 +19,7 @@ voice = "Kore"
 api_key_env = "GEMINI_API_KEY"
 ```
 
-The model above is an example, not an availability guarantee for your Google account. Use a bare model identifier without `models/`. Set the named environment variable before launching Codex; never put the key itself in the config, command arguments, or a voice request. The default key variable is `GEMINI_API_KEY`. Normal executor environment policy still applies to variables inherited by Codex: do not explicitly allow secret variables into tool environments.
+The model above is an example, not an availability guarantee for your Google account. Use a bare model identifier without `models/`. Set the named environment variable before launching Codex; never put the key itself in the config, command arguments, or a voice request. The default key variable is `GEMINI_API_KEY`. Normal executor environment policy still applies to variables inherited by Codex. Its default exclusions cover names containing `KEY`, `SECRET`, or `TOKEN`; a custom name outside those patterns requires an explicit shell environment exclusion. Deliberately including a secret through that policy remains possible. This feature does not rewrite executor environment policy.
 
 Launch the matching installed package and open `/voice settings`. **Backend**, **Model**, and **Choose voice** select the frontend for the next voice conversation. Existing audio device settings remain in the same menu. Switching these preferences does not change the coding model or replace a running voice conversation. Stop and start voice to use a new selection.
 
