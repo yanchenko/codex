@@ -2,6 +2,7 @@
 use clap::Parser;
 use clap::Subcommand;
 use codex_protocol::protocol::RealtimeVoice;
+use codex_protocol::protocol::RealtimeVoicesList;
 use codex_voice_control::Operation;
 use std::path::PathBuf;
 use uuid::Uuid;
@@ -80,8 +81,14 @@ pub(crate) async fn run(args: VoiceControlCommand) -> anyhow::Result<()> {
                 "provider voice routing is not integrated: {provider}"
             );
             for voice in &voices {
-                serde_json::from_value::<RealtimeVoice>(serde_json::Value::String(voice.clone()))
-                    .map_err(|_| anyhow::anyhow!("unsupported OpenAI voice: {voice}"))?;
+                let parsed = serde_json::from_value::<RealtimeVoice>(serde_json::Value::String(
+                    voice.clone(),
+                ))
+                .map_err(|_| anyhow::anyhow!("unsupported OpenAI voice: {voice}"))?;
+                anyhow::ensure!(
+                    RealtimeVoicesList::builtin().v3.contains(&parsed),
+                    "OpenAI voice {voice} is unavailable for the managed WebRTC V3 backend"
+                );
             }
             Some(Operation::Configure { provider, voices })
         }

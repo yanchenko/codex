@@ -9,7 +9,7 @@ The current per-start routing supports the OpenAI backend. Custom realtime endpo
 Use the same built CLI for every participating terminal. Configure a pool before starting calls:
 
 ```sh
-codex voice-control pool --provider openai marin cedar
+codex voice-control pool --provider openai cove maple
 codex -c realtime.managed_voice=true
 ```
 

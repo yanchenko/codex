@@ -3,6 +3,7 @@ use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::RealtimeVoice;
+use codex_protocol::protocol::RealtimeVoicesList;
 use codex_realtime_webrtc::NativeLeaseProof;
 use codex_realtime_webrtc::NativeRetirement;
 use codex_realtime_webrtc::NativeRetirementState;
@@ -288,7 +289,7 @@ async fn run(
                         let admission = admitted.and_then(|state| {
                             anyhow::ensure!(lease_valid(&state, &call, admission_epoch) && !abort.is_aborted(), "voice start cancelled or stale");
                             let lease = state.leases.get(&instance).cloned().ok_or_else(|| anyhow::anyhow!("missing voice reservation"))?;
-                            let voice = serde_json::from_value(serde_json::Value::String(lease.voice.clone()))?;
+                            let voice = managed_openai_voice(&lease.voice)?;
                             Ok(Admission { lease, voice, proof, startup })
                         }).map_err(|error| error.to_string());
                         if admission.is_err() { abort.abort(); }
@@ -382,10 +383,28 @@ async fn run(
     }
 }
 
+fn managed_openai_voice(name: &str) -> anyhow::Result<RealtimeVoice> {
+    let voice = serde_json::from_value(serde_json::Value::String(name.to_owned()))?;
+    anyhow::ensure!(
+        RealtimeVoicesList::builtin().v3.contains(&voice),
+        "OpenAI voice {name} is unavailable for managed WebRTC V3; reconfigure the voice pool"
+    );
+    Ok(voice)
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used, clippy::unwrap_used)]
     use super::*;
+
+    #[test]
+    fn managed_openai_voice_accepts_v3_catalog_and_rejects_v2_only_names() {
+        assert_eq!(managed_openai_voice("cove").unwrap(), RealtimeVoice::Cove);
+        assert_eq!(managed_openai_voice("maple").unwrap(), RealtimeVoice::Maple);
+        assert!(managed_openai_voice("marin").is_err());
+        assert!(managed_openai_voice("cedar").is_err());
+        assert!(managed_openai_voice("unknown").is_err());
+    }
 
     async fn setup() -> (
         tempfile::TempDir,
@@ -412,7 +431,7 @@ mod tests {
         admin
             .request(Operation::Configure {
                 provider: "openai".into(),
-                voices: vec!["alloy".into(), "ash".into()],
+                voices: vec!["cove".into(), "maple".into()],
             })
             .await
             .unwrap();
@@ -454,12 +473,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn persisted_v2_pool_is_rejected_before_native_startup_and_retires() {
+        let (_temp, mut admin, managed, mut events, server) = setup().await;
+        admin
+            .request(Operation::Configure {
+                provider: "openai".into(),
+                voices: vec!["marin".into()],
+            })
+            .await
+            .unwrap();
+        let (abort, _registration) = AbortHandle::new_pair();
+        managed.reserve(1, None, abort.clone()).unwrap();
+        assert!(
+            admission(&mut events, 1)
+                .await
+                .unwrap_err()
+                .contains("WebRTC V3")
+        );
+        assert!(abort.is_aborted());
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !admin.snapshot().await.unwrap().leases.is_empty() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        server.abort();
+    }
+
+    #[tokio::test]
     async fn global_off_aborts_late_start_but_waits_for_startup_retirement() {
         let (_temp, mut admin, managed, mut events, server) = setup().await;
         let (abort, _registration) = AbortHandle::new_pair();
         managed.reserve(1, None, abort.clone()).unwrap();
         let pending_start = admission(&mut events, 1).await.unwrap();
-        assert_eq!(pending_start.voice, RealtimeVoice::Alloy);
+        assert_eq!(pending_start.voice, RealtimeVoice::Cove);
         let before_off = pending_start.lease.epoch;
         let stopped = admin.request(Operation::GlobalOff).await.unwrap();
         assert!(stopped.stopping);
