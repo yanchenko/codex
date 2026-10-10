@@ -20,6 +20,23 @@ mod audio_track;
     path = "devices_unavailable.rs"
 )]
 mod devices;
+#[cfg(any(
+    target_os = "macos",
+    all(target_os = "linux", target_env = "gnu"),
+    all(windows, target_env = "msvc")
+))]
+mod gemini;
+#[cfg(not(any(
+    target_os = "macos",
+    all(target_os = "linux", target_env = "gnu"),
+    all(windows, target_env = "msvc")
+)))]
+mod gemini {
+    pub(crate) fn run() -> Result<(), &'static str> {
+        Err("Gemini native codec unavailable on this target")
+    }
+}
+
 mod incoming;
 mod runtime;
 mod service_failure;
@@ -50,6 +67,14 @@ fn main() {
     let mut args = std::env::args_os().skip(/*n*/ 1);
     match (args.next(), args.next()) {
         (Some(arg), None) if arg == "--build-commit" => println!("{BUILD_COMMIT}"),
+        (Some(arg), None) if arg == "--gemini-live" => {
+            if gemini::run().is_err() {
+                eprintln!(
+                    "Gemini voice gateway failed; verify configuration and start voice again"
+                );
+                std::process::exit(1);
+            }
+        }
         (None, None) => {
             let phase = Cell::new(HelperExitStage::ControlSequence);
             if run(&phase, |executor| {

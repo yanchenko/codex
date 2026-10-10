@@ -104,3 +104,48 @@ It copies and relocates the runtime with the real helper, checks client
 initialization and close, and rejects duplicate initialization. This requires
 native inputs separately; ordinary CI does not run this ignored test. It tests
 helper loading, not microphone, speaker, backend, or release behavior.
+
+## Gemini Live adapter mode
+
+`--gemini-live` runs a device-free, single-call Rust adapter. The ordinary helper
+retains microphone, speaker, AEC and native lifecycle ownership. Both modes reuse
+the same pinned RTC and Opus libraries. Supported native codec targets are macOS,
+GNU Linux and MSVC Windows; other helper targets reject this mode explicitly.
+
+The parent supplies a maximum 16 KiB newline-terminated JSON initialization over
+private stdin: `protocol: 1`, a random 64-hex `nonce`, and `google_api_key`.
+The adapter emits a readiness JSON line containing `ready`, `protocol`,
+`build_commit`, `host: "127.0.0.1"` and its ephemeral `port`. The parent must
+validate the matching build before using the capability and keep stdin open for
+the call's lifetime. EOF triggers cleanup; an independent watchdog bounds a
+stuck shutdown. Credentials must never be passed as arguments or ordinary RPC.
+
+Authenticated multipart `POST /v1/live` accepts `sdp` and `session`, whose
+`gemini: {model, voice}` metadata is frozen for that call. The model is a bare
+identifier (maximum 128 bytes), the voice is provider-specific (64 bytes).
+`GET /v1/live/<call-id>` attaches exactly one nonce-authenticated sideband.
+Browser origins are rejected. SDP admits assigned-host numeric candidates only;
+the gateway binds media to loopback, disables mDNS/STUN/TURN/TCP, and filters actual
+UDP sources and destinations before ICE can learn peer-reflexive addresses.
+Google uses the fixed official TLS endpoint, direct TCP without proxy environment
+or redirects, and only its own API key header.
+
+Input is decoded directly to mono PCM16 at 16 kHz. Google's 24 kHz PCM is encoded
+to paced 20 ms Opus packets with the normal 48 kHz RTP clock. Queues and messages
+are bounded; interruption drops queued adapter audio. Already delivered native
+playout may remain briefly; this does not implement an immediate speaker flush.
+Background Codex context stays buffered until the next explicit speakable append,
+so it cannot interrupt Google generation. Google provides no stable utterance ID
+for correlating arbitrarily late input transcripts; ordering follows explicit
+finished/interrupted/turn-complete/delegation boundaries without pretending that
+assistant audio starts identify a new user utterance. Disconnect requires a fresh
+voice start and never replays or cancels an admitted coding task.
+
+`voice-host` unit tests cover real native RTC, protocol translation and mock
+Google HTTP/WS sessions. `installed_client` checks the packaged subprocess with
+an empty environment, readiness, rejected initialization and parent loss.
+The ignored `live_google_rust_gateway_text_and_native_audio` test accepts
+`CODEX_GEMINI_TEST_KEY_FILE` pointing to an authorized xcconfig-style key file and
+an optional `CODEX_GEMINI_TEST_MODEL`; it sends synthetic silence and observes
+transcription plus native RTP output without opening any audio device. Live tests
+incur provider usage and are never part of an ordinary automated run.
