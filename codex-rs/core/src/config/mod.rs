@@ -4508,6 +4508,9 @@ impl Config {
                 .map_or_else(RealtimeConfig::default, |realtime| {
                     let defaults = RealtimeConfig::default();
                     RealtimeConfig {
+                        backend: realtime.backend,
+                        openai: realtime.openai,
+                        gemini: realtime.gemini,
                         local_adapter: realtime.local_adapter,
                         version: realtime.version.unwrap_or(defaults.version),
                         session_type: realtime.session_type.unwrap_or(defaults.session_type),

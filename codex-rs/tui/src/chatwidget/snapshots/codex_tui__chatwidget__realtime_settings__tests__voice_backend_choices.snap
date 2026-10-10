@@ -1,0 +1,13 @@
+---
+source: tui/src/chatwidget/realtime_settings_tests.rs
+expression: "render_bottom_popup(&chat, 80)"
+---
+  Voice backend
+  Applies to the next voice conversation. Coding model is unchanged.
+
+
+  1. OpenAI
+› 2. Gemini Live (current)
+  3. Back
+
+  enter select · esc back

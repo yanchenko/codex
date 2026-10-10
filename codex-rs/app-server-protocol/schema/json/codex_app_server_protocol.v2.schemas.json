@@ -14264,6 +14264,14 @@
       "title": "RawResponseItemCompletedNotification",
       "type": "object"
     },
+    "RealtimeBackend": {
+      "description": "Voice frontend only; independent of the coding model/provider.",
+      "enum": [
+        "openai",
+        "gemini"
+      ],
+      "type": "string"
+    },
     "RealtimeConversationVersion": {
       "enum": [
         "v1",
@@ -14271,6 +14279,25 @@
         "v3"
       ],
       "type": "string"
+    },
+    "RealtimeFrontend": {
+      "additionalProperties": false,
+      "description": "Per-call selection. URLs and credentials remain trusted server configuration.",
+      "properties": {
+        "backend": {
+          "$ref": "#/definitions/RealtimeBackend"
+        },
+        "voice": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "backend"
+      ],
+      "type": "object"
     },
     "RealtimeOutputModality": {
       "enum": [

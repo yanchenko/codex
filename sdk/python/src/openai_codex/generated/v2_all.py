@@ -3665,10 +3665,24 @@ class RateLimitWindow(BaseModel):
     window_duration_mins: Annotated[int | None, Field(alias="windowDurationMins")] = None
 
 
+class RealtimeBackend(Enum):
+    openai = "openai"
+    gemini = "gemini"
+
+
 class RealtimeConversationVersion(Enum):
     v1 = "v1"
     v2 = "v2"
     v3 = "v3"
+
+
+class RealtimeFrontend(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+        populate_by_name=True,
+    )
+    backend: RealtimeBackend
+    voice: str | None = None
 
 
 class RealtimeOutputModality(Enum):

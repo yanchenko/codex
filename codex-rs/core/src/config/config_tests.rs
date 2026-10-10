@@ -13228,6 +13228,9 @@ voice = "marin"
     assert_eq!(
         config.realtime,
         RealtimeConfig {
+            backend: None,
+            openai: Default::default(),
+            gemini: None,
             voice: Some(RealtimeVoice::Marin),
             ..RealtimeConfig::default()
         }
@@ -13251,6 +13254,9 @@ voice = "cedar"
     assert_eq!(
         cfg.realtime,
         Some(RealtimeToml {
+            backend: None,
+            openai: Default::default(),
+            gemini: None,
             local_adapter: None,
             version: Some(RealtimeWsVersion::V2),
             session_type: Some(RealtimeWsMode::Transcription),
@@ -13270,6 +13276,9 @@ voice = "cedar"
     assert_eq!(
         config.realtime,
         RealtimeConfig {
+            backend: None,
+            openai: Default::default(),
+            gemini: None,
             local_adapter: None,
             version: RealtimeWsVersion::V2,
             session_type: RealtimeWsMode::Transcription,

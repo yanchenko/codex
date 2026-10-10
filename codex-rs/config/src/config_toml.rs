@@ -669,6 +669,11 @@ pub use codex_protocol::protocol::RealtimeVoice;
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct RealtimeConfig {
+    pub backend: Option<codex_protocol::protocol::RealtimeBackend>,
+    #[serde(default)]
+    pub openai: RealtimeOpenaiConfig,
+    pub gemini: Option<RealtimeGeminiConfig>,
+
     pub local_adapter: Option<RealtimeLocalAdapterConfig>,
     pub version: RealtimeWsVersion,
     #[serde(rename = "type")]
@@ -680,12 +685,45 @@ pub struct RealtimeConfig {
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct RealtimeToml {
+    pub backend: Option<codex_protocol::protocol::RealtimeBackend>,
+    #[serde(default)]
+    pub openai: RealtimeOpenaiConfig,
+    pub gemini: Option<RealtimeGeminiConfig>,
+
     pub local_adapter: Option<RealtimeLocalAdapterConfig>,
     pub version: Option<RealtimeWsVersion>,
     #[serde(rename = "type")]
     pub session_type: Option<RealtimeWsMode>,
     pub transport: Option<RealtimeTransport>,
     pub voice: Option<RealtimeVoice>,
+}
+
+/// Optional OpenAI voice model choices; omitted model retains the server default.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RealtimeOpenaiConfig {
+    pub model: Option<String>,
+    #[serde(default)]
+    pub models: Vec<String>,
+}
+
+/// Trusted Gemini capability. Only the environment variable name is persisted.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RealtimeGeminiConfig {
+    pub model: String,
+    #[serde(default)]
+    pub models: Vec<String>,
+    #[serde(default = "default_gemini_voice")]
+    pub voice: String,
+    #[serde(default = "default_gemini_key_env")]
+    pub api_key_env: String,
+}
+fn default_gemini_voice() -> String {
+    "Kore".into()
+}
+fn default_gemini_key_env() -> String {
+    "GEMINI_API_KEY".into()
 }
 
 /// Opt-in local voice adapter. This does not change the executor model provider.

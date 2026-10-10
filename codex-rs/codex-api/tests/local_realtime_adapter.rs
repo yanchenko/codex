@@ -105,7 +105,10 @@ async fn http_sends_nonce_only_and_preserves_multipart_call_contract() {
         .expect(1)
         .mount(&server)
         .await;
-    let adapter = LocalRealtimeAdapter::new(&server.uri(), NONCE).unwrap();
+    let adapter = LocalRealtimeAdapter::new(&server.uri(), NONCE)
+        .unwrap()
+        .with_gemini("gemini-test-live", "Kore")
+        .unwrap();
     let response = adapter
         .create_call(&factory(), "v=0\r\noffer".to_owned(), session())
         .await
@@ -127,6 +130,7 @@ async fn http_sends_nonce_only_and_preserves_multipart_call_contract() {
     assert!(body.contains("name=\"sdp\""));
     assert!(body.contains("name=\"session\""));
     assert!(!body.contains(NONCE));
+    assert!(body.contains(r#""gemini":{"model":"gemini-test-live","voice":"Kore"}"#));
 }
 
 #[tokio::test]
@@ -259,4 +263,21 @@ async fn local_adapter_cannot_override_application_network_policy() {
             codex_http_client::TransportError::Policy(_)
         ))
     ));
+}
+
+#[test]
+fn per_call_gemini_metadata_rejects_unbounded_or_noncanonical_identifiers() {
+    for (model, voice) in [
+        ("models/gemini-live".to_owned(), "Kore".to_owned()),
+        ("m".repeat(129), "Kore".into()),
+        ("gemini-live".into(), "v".repeat(65)),
+        ("gemini-live".into(), "".into()),
+    ] {
+        assert!(
+            LocalRealtimeAdapter::new("http://127.0.0.1:1234", NONCE)
+                .unwrap()
+                .with_gemini(&model, &voice)
+                .is_err()
+        );
+    }
 }

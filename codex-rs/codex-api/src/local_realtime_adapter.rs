@@ -25,6 +25,7 @@ pub(crate) const MAX_ADAPTER_CONTEXT_BYTES: usize = 256 * 1024;
 pub struct LocalRealtimeAdapter {
     base_url: String,
     authorization: HeaderValue,
+    gemini: Option<serde_json::Value>,
 }
 
 impl std::fmt::Debug for LocalRealtimeAdapter {
@@ -68,7 +69,24 @@ impl LocalRealtimeAdapter {
         Ok(Self {
             base_url: base_url.to_owned(),
             authorization,
+            gemini: None,
         })
+    }
+
+    /// Metadata is attached only to this validated loopback adapter's call request.
+    pub fn with_gemini(mut self, model: &str, voice: &str) -> Result<Self, ApiError> {
+        for (value, max) in [(model, 128), (voice, 64)] {
+            if value.is_empty()
+                || value.len() > max
+                || !value
+                    .bytes()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_' | b'.'))
+            {
+                return Err(invalid("invalid Gemini model or voice identifier"));
+            }
+        }
+        self.gemini = Some(serde_json::json!({ "model": model, "voice": voice }));
+        Ok(self)
     }
 
     pub fn api_base_url(&self) -> String {
@@ -137,7 +155,8 @@ impl LocalRealtimeAdapter {
             ReqwestTransport::from_http_client(client),
             self.provider(),
             Arc::new(self.clone()),
-        );
+        )
+        .with_local_gemini(self.gemini.clone());
         permit
             .run(async {
                 tokio::time::timeout(

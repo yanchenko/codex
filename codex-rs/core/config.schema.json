@@ -3943,6 +3943,14 @@
       },
       "type": "object"
     },
+    "RealtimeBackend": {
+      "description": "Voice frontend only; independent of the coding model/provider.",
+      "enum": [
+        "openai",
+        "gemini"
+      ],
+      "type": "string"
+    },
     "RealtimeConversationVersion": {
       "enum": [
         "v1",
@@ -3950,6 +3958,34 @@
         "v3"
       ],
       "type": "string"
+    },
+    "RealtimeGeminiConfig": {
+      "additionalProperties": false,
+      "description": "Trusted Gemini capability. Only the environment variable name is persisted.",
+      "properties": {
+        "api_key_env": {
+          "default": "GEMINI_API_KEY",
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "models": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "voice": {
+          "default": "Kore",
+          "type": "string"
+        }
+      },
+      "required": [
+        "model"
+      ],
+      "type": "object"
     },
     "RealtimeLocalAdapterConfig": {
       "additionalProperties": false,
@@ -3970,11 +4006,45 @@
       ],
       "type": "object"
     },
+    "RealtimeOpenaiConfig": {
+      "additionalProperties": false,
+      "description": "Optional OpenAI voice model choices; omitted model retains the server default.",
+      "properties": {
+        "model": {
+          "type": "string"
+        },
+        "models": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
     "RealtimeToml": {
       "additionalProperties": false,
       "properties": {
+        "backend": {
+          "$ref": "#/definitions/RealtimeBackend"
+        },
+        "gemini": {
+          "$ref": "#/definitions/RealtimeGeminiConfig"
+        },
         "local_adapter": {
           "$ref": "#/definitions/RealtimeLocalAdapterConfig"
+        },
+        "openai": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/RealtimeOpenaiConfig"
+            }
+          ],
+          "default": {
+            "model": null,
+            "models": []
+          }
         },
         "transport": {
           "$ref": "#/definitions/RealtimeTransport"

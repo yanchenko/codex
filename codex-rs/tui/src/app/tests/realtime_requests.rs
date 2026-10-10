@@ -159,6 +159,7 @@ async fn check_remote_voice_start(
         AppEvent::CodexOp(Op::RealtimeConversationStart {
             thread_id,
             offer_sdp: String::from("v=0\r\n").into(),
+            selection: None,
         }),
     ))
     .await?;
@@ -1788,6 +1789,7 @@ async fn remote_voice_config_read_failure_does_not_start_with_local_voice() -> R
             &AppCommand::RealtimeConversationStart {
                 thread_id,
                 offer_sdp: String::from("v=0\r\n").into(),
+                selection: None,
             },
         )
         .await
@@ -1856,6 +1858,7 @@ async fn embedded_voice_settings_follow_project_after_thread_switch() -> Result<
             &AppCommand::RealtimeConversationStart {
                 thread_id,
                 offer_sdp: String::from("v=0\r\n").into(),
+                selection: None,
             },
         )
         .await?;
@@ -1975,6 +1978,7 @@ async fn remote_voice_catalog_success_and_failure() -> Result<()> {
                             AppEvent::CodexOp(Op::RealtimeConversationStart {
                                 thread_id,
                                 offer_sdp: String::from("v=0\r\n").into(),
+                                selection: None,
                             }),
                         ))
                         .await?;
@@ -2289,5 +2293,170 @@ async fn microphone_discovery_ignores_another_threads_completion() -> Result<()>
     }
     server.shutdown().await?;
     proxy.await??;
+    Ok(())
+}
+
+#[tokio::test]
+async fn frozen_gemini_frontend_routes_provider_model_and_opaque_voice_without_openai_override()
+-> Result<()> {
+    use super::session_lifecycle_requests::HistoryCapabilities;
+    use crate::realtime_frontend::RealtimeCallSelection;
+    use codex_protocol::protocol::RealtimeBackend;
+    use codex_protocol::protocol::RealtimeFrontend;
+    let (mut app, _events, _ops) = make_test_app_with_channels().await;
+    let (mut app_server, requests, proxy) =
+        super::session_lifecycle_requests::start_recording_app_server_with_realtime_speech(
+            &app.config,
+            HistoryCapabilities::Current,
+            None,
+            None,
+            crate::app_server_session::ThreadParamsMode::Remote,
+            RealtimeRequestBehavior::AcceptStart,
+            codex_config::LoaderOverrides::default(),
+        )
+        .await?;
+    let thread_id = ThreadId::new();
+    app.active_thread_id = Some(thread_id);
+    app.chat_widget
+        .handle_thread_session_quiet(test_thread_session(thread_id, app.config.cwd.to_path_buf()));
+    // A later preference change must not reinterpret the already captured offer.
+    app.config.realtime.backend = Some(RealtimeBackend::Openai);
+    app.config.realtime.voice = Some(codex_protocol::protocol::RealtimeVoice::Maple);
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    Box::pin(app.handle_event(
+        &mut tui,
+        &mut app_server,
+        AppEvent::CodexOp(Op::RealtimeConversationStart {
+            thread_id,
+            offer_sdp: String::from("v=0\r\n").into(),
+            selection: Some(RealtimeCallSelection {
+                frontend: RealtimeFrontend {
+                    backend: RealtimeBackend::Gemini,
+                    voice: Some("Kore".into()),
+                },
+                model: Some("gemini-test-live".into()),
+                voice: None,
+                omit_openai_voice: false,
+            }),
+        }),
+    ))
+    .await?;
+    let starts = recorded_params(&requests, "thread/realtime/start");
+    assert_eq!(starts.len(), 1);
+    assert_eq!(
+        starts[0]["frontend"],
+        serde_json::json!({"backend":"gemini","voice":"Kore"})
+    );
+    assert_eq!(starts[0]["model"], "gemini-test-live");
+    assert!(
+        starts[0]
+            .get("voice")
+            .is_none_or(serde_json::Value::is_null)
+    );
+    assert_eq!(starts[0]["version"], "v3");
+    app_server.shutdown().await?;
+    proxy.await??;
+    Ok(())
+}
+
+#[tokio::test]
+async fn frontend_model_preferences_are_persisted_together_and_effective_config_is_reloaded()
+-> Result<()> {
+    use crate::realtime_frontend::FrontendSetting;
+    use codex_protocol::protocol::RealtimeBackend;
+    let (mut app, _events, _ops) = make_test_app_with_channels().await;
+    let (app_server, requests, proxy) = start_recording_remote_app_server(&app.config).await?;
+    app.persist_realtime_frontend(
+        &app_server,
+        FrontendSetting::Model {
+            backend: RealtimeBackend::Openai,
+            model: Some("voice-configured".into()),
+        },
+    )
+    .await;
+    assert_eq!(app.config.realtime.backend, Some(RealtimeBackend::Openai));
+    assert_eq!(
+        app.config.realtime.openai.model.as_deref(),
+        Some("voice-configured")
+    );
+    assert_eq!(
+        app.chat_widget
+            .config_ref()
+            .realtime
+            .openai
+            .model
+            .as_deref(),
+        Some("voice-configured")
+    );
+    let writes = recorded_params(&requests, "config/batchWrite");
+    assert_eq!(
+        writes[0]["edits"],
+        serde_json::json!([
+            {"keyPath":"realtime.openai.model","value":"voice-configured","mergeStrategy":"replace"},
+            {"keyPath":"realtime.backend","value":"openai","mergeStrategy":"replace"}
+        ])
+    );
+    app_server.shutdown().await?;
+    proxy.await??;
+    Ok(())
+}
+
+#[tokio::test]
+async fn explicit_openai_uses_server_default_and_preserves_frozen_or_unknown_voice() -> Result<()> {
+    use super::session_lifecycle_requests::HistoryCapabilities;
+    use crate::realtime_frontend::RealtimeCallSelection;
+    use codex_protocol::protocol::RealtimeBackend;
+    use codex_protocol::protocol::RealtimeFrontend;
+    use codex_protocol::protocol::RealtimeVoice;
+    for (voice, omit, expected) in [
+        (None, false, Some("maple")),
+        (Some(RealtimeVoice::Juniper), false, Some("juniper")),
+        (None, true, None),
+    ] {
+        let (mut app, _events, _ops) = make_test_app_with_channels().await;
+        let (mut app_server, requests, proxy) =
+            super::session_lifecycle_requests::start_recording_app_server_with_realtime_speech(
+                &app.config,
+                HistoryCapabilities::VoiceCatalogCustom,
+                None,
+                None,
+                crate::app_server_session::ThreadParamsMode::Remote,
+                RealtimeRequestBehavior::AcceptStart,
+                codex_config::LoaderOverrides::default(),
+            )
+            .await?;
+        let thread_id = ThreadId::new();
+        app.active_thread_id = Some(thread_id);
+        app.chat_widget
+            .handle_thread_session_quiet(test_thread_session(
+                thread_id,
+                app.config.cwd.to_path_buf(),
+            ));
+        // A mutable preference must not replace either the captured explicit voice or default intent.
+        app.config.realtime.voice = Some(RealtimeVoice::Cove);
+        let mut tui = crate::tui::test_support::make_test_tui()?;
+        Box::pin(app.handle_event(
+            &mut tui,
+            &mut app_server,
+            AppEvent::CodexOp(Op::RealtimeConversationStart {
+                thread_id,
+                offer_sdp: String::from("v=0\r\n").into(),
+                selection: Some(RealtimeCallSelection {
+                    frontend: RealtimeFrontend {
+                        backend: RealtimeBackend::Openai,
+                        voice: None,
+                    },
+                    model: None,
+                    voice,
+                    omit_openai_voice: omit,
+                }),
+            }),
+        ))
+        .await?;
+        let starts = recorded_params(&requests, "thread/realtime/start");
+        assert_eq!(starts[0]["voice"].as_str(), expected);
+        app_server.shutdown().await?;
+        proxy.await??;
+    }
     Ok(())
 }

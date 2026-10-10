@@ -1,0 +1,14 @@
+---
+source: tui/src/chatwidget/realtime_settings_tests.rs
+expression: "render_bottom_popup(&chat, 80)"
+---
+  Voice backend
+  Applies to the next voice conversation. Coding model is unchanged.
+
+
+› 1. OpenAI (current)
+     Gemini Live (disabled)  Configure realtime.gemini.model and api_key_env
+                             first.
+  2. Back
+
+  enter select · esc back
