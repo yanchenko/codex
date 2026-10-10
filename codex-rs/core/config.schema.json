@@ -3954,6 +3954,10 @@
     "RealtimeToml": {
       "additionalProperties": false,
       "properties": {
+        "managed_voice": {
+          "description": "Enroll native voice in the local coordinator for unique voice allocation and global stop.",
+          "type": "boolean"
+        },
         "transport": {
           "$ref": "#/definitions/RealtimeTransport"
         },

@@ -3,6 +3,7 @@
 //! Interleaved speakers retain separate displays so settled caption text never reanimates.
 //! Speech recovery suppresses stale queued answers while preserving unspoken text fallbacks.
 
+mod managed;
 mod recording_controls;
 mod transcript_replay;
 
@@ -134,6 +135,15 @@ enum StartupRetry {
 
 #[derive(Default)]
 pub(super) struct RealtimeConversationUiState {
+    managed: Option<crate::managed_voice::ManagedVoice>,
+    managed_voice: Option<codex_protocol::protocol::RealtimeVoice>,
+    managed_epoch: Option<u64>,
+    external_start_epoch: Option<u64>,
+    pending_native: Option<(
+        futures::future::AbortRegistration,
+        codex_realtime_webrtc::AudioDeviceSelection,
+    )>,
+    enrollment_error_reported: bool,
     startup_retry: StartupRetry,
     pub(super) phase: RealtimeConversationPhase,
     recover_late_transcripts: bool,
@@ -312,19 +322,28 @@ impl ChatWidget {
     }
 
     fn start_realtime_conversation(&mut self, thread_id: ThreadId) {
+        self.enroll_managed_voice();
         let Some(audio) = self.realtime_audio_settings() else {
             return;
         };
+        let attempt_id = match NEXT_REALTIME_ATTEMPT_ID.fetch_update(
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+            |id| id.checked_add(1),
+        ) {
+            Ok(id) => id,
+            Err(_) => {
+                self.add_realtime_error("Voice generation limit reached; restart the CLI.".into());
+                return;
+            }
+        };
         self.realtime_conversation.recover_late_transcripts = false;
-        self.realtime_conversation.attempt_id =
-            NEXT_REALTIME_ATTEMPT_ID.fetch_add(1, Ordering::Relaxed);
+        self.realtime_conversation.attempt_id = attempt_id;
         self.realtime_conversation.thread_id = Some(thread_id);
-        let attempt_id = self.realtime_conversation.attempt_id;
         let (startup_abort, abort_registration) = AbortHandle::new_pair();
-        self.realtime_conversation.startup_abort = Some(startup_abort);
+        self.realtime_conversation.startup_abort = Some(startup_abort.clone());
         self.realtime_conversation.phase = RealtimeConversationPhase::Starting;
         self.update_realtime_footer();
-        let app_event_tx = self.app_event_tx.clone();
         let selection = codex_realtime_webrtc::AudioDeviceSelection {
             microphone: audio.microphone,
             speaker: audio.speaker,
@@ -332,19 +351,67 @@ impl ChatWidget {
                 .microphone_channel
                 .map(|channels| channels.as_slice().to_vec()),
         };
-        std::thread::spawn(move || {
-            let result = RealtimeWebrtcSession::start(abort_registration, selection)
-                .map_err(|error| error.to_string());
-            app_event_tx.send(AppEvent::RealtimeWebrtcOfferCreated {
-                thread_id,
-                attempt_id,
-                result,
-            });
-        });
+        if self.config.realtime.managed_voice {
+            // Admission precedes helper creation, including terminal shortcuts and retries.
+            self.realtime_conversation.startup_retry = StartupRetry::Used;
+            self.realtime_conversation.pending_native = Some((abort_registration, selection));
+            let expected = self.realtime_conversation.external_start_epoch.take();
+            let result = self
+                .realtime_conversation
+                .managed
+                .as_ref()
+                .ok_or_else(|| "Managed voice could not enroll this provider/owner.".to_owned())
+                .and_then(|managed| managed.reserve(attempt_id, expected, startup_abort));
+            if let Err(error) = result {
+                self.on_realtime_error(error);
+            }
+        } else {
+            self.spawn_realtime_native(thread_id, attempt_id, abort_registration, selection, None);
+        }
         self.request_redraw();
     }
 
+    fn spawn_realtime_native(
+        &mut self,
+        thread_id: ThreadId,
+        attempt_id: u64,
+        abort: futures::future::AbortRegistration,
+        selection: codex_realtime_webrtc::AudioDeviceSelection,
+        admission: Option<crate::managed_voice::Admission>,
+    ) {
+        let app_event_tx = self.app_event_tx.clone();
+        let managed_instance = admission
+            .as_ref()
+            .map(|admission| admission.lease.call.instance);
+        if let Err(error) = std::thread::Builder::new()
+            .name("voice-start".into())
+            .spawn(move || {
+                let result = match admission {
+                    Some(admission) => RealtimeWebrtcSession::start_tracked(
+                        abort,
+                        selection,
+                        admission.startup,
+                        Some(admission.proof),
+                    ),
+                    None => RealtimeWebrtcSession::start(abort, selection),
+                }
+                .map_err(|error| error.to_string());
+                app_event_tx.send(AppEvent::RealtimeWebrtcOfferCreated {
+                    thread_id,
+                    attempt_id,
+                    managed_instance,
+                    result,
+                });
+            })
+        {
+            self.on_realtime_error(format!("Could not dispatch voice startup: {error}"));
+        }
+    }
+
     pub(crate) fn stop_realtime_conversation(&mut self) {
+        if let Some(managed) = &self.realtime_conversation.managed {
+            managed.stop(self.realtime_conversation.attempt_id);
+        }
         self.realtime_conversation.startup_retry = StartupRetry::Used;
         if matches!(
             self.realtime_conversation.phase,
@@ -401,7 +468,9 @@ impl ChatWidget {
                 return;
             }
         };
-        self.realtime_conversation.startup_abort = None;
+        if self.realtime_conversation.managed.is_none() {
+            self.realtime_conversation.startup_abort = None;
+        }
         if self.realtime_conversation.microphone_muted
             && let Err(error) = offer.handle.set_microphone_muted(/*muted*/ true)
         {
@@ -417,6 +486,20 @@ impl ChatWidget {
         if !self.submit_op(AppCommand::RealtimeConversationStart {
             thread_id,
             offer_sdp: offer.offer_sdp.into(),
+            voice: self.realtime_conversation.managed_voice,
+            managed: self
+                .realtime_conversation
+                .managed
+                .as_ref()
+                .and_then(|managed| {
+                    self.realtime_conversation.managed_epoch.map(|epoch| {
+                        crate::managed_voice::StartIdentity {
+                            instance: managed.instance,
+                            generation: attempt_id,
+                            epoch,
+                        }
+                    })
+                }),
         }) {
             self.record_realtime_failure();
             self.reset_realtime_conversation();
@@ -434,12 +517,18 @@ impl ChatWidget {
             return;
         };
         let attempt_id = self.realtime_conversation.attempt_id;
+        let managed_instance = self
+            .realtime_conversation
+            .managed
+            .as_ref()
+            .map(|managed| managed.instance);
         let app_event_tx = self.app_event_tx.clone();
         std::thread::spawn(move || {
             let result = handle.apply_answer_sdp(answer_sdp);
             app_event_tx.send(AppEvent::RealtimeWebrtcConnected {
                 thread_id,
                 attempt_id,
+                managed_instance,
                 result,
             });
         });
@@ -498,6 +587,12 @@ impl ChatWidget {
             || !self.realtime_conversation.backend_started
             || !self.realtime_conversation.webrtc_connected
         {
+            return;
+        }
+        if let Some(managed) = &self.realtime_conversation.managed
+            && !managed.active(self.realtime_conversation.attempt_id)
+        {
+            self.on_realtime_error("Voice coordinator could not confirm startup.".into());
             return;
         }
         self.realtime_conversation.phase = RealtimeConversationPhase::Active;
@@ -1761,6 +1856,9 @@ impl ChatWidget {
     }
 
     pub(crate) fn reset_realtime_conversation(&mut self) -> Option<ThreadId> {
+        if let Some(managed) = &self.realtime_conversation.managed {
+            managed.stop(self.realtime_conversation.attempt_id);
+        }
         if self.realtime_conversation_is_running() {
             self.app_event_tx
                 .send(AppEvent::RealtimeConversationStateChanged);
@@ -1855,6 +1953,8 @@ impl ChatWidget {
             .next()
             .is_some();
         self.realtime_conversation = RealtimeConversationUiState {
+            managed: self.realtime_conversation.managed.take(),
+            enrollment_error_reported: self.realtime_conversation.enrollment_error_reported,
             attempt_id: self.realtime_conversation.attempt_id,
             // Keep parked speech tied to its input until it is taken for replay.
             input_generation: self.realtime_conversation.input_generation,

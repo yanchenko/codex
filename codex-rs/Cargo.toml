@@ -94,6 +94,7 @@ members = [
     "process-hardening",
     "realtime-webrtc",
     "voice-host",
+    "voice-control",
     "protocol",
     "prompts",
     "rollout",
@@ -285,6 +286,7 @@ codex-tools = { path = "tools" }
 codex-tcp-tunnel = { path = "tcp-tunnel" }
 codex-tui = { path = "tui" }
 codex-uds = { path = "uds" }
+codex-voice-control = { path = "voice-control" }
 codex-utils-absolute-path = { path = "utils/absolute-path" }
 codex-utils-approval-presets = { path = "utils/approval-presets" }
 codex-utils-audio = { path = "utils/audio" }

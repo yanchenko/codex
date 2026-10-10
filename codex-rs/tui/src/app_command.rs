@@ -102,6 +102,10 @@ pub(crate) enum AppCommand {
     RealtimeConversationStart {
         thread_id: ThreadId,
         offer_sdp: RealtimeOfferSdp,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        voice: Option<codex_protocol::protocol::RealtimeVoice>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        managed: Option<crate::managed_voice::StartIdentity>,
     },
     RealtimeConversationStop {
         thread_id: ThreadId,

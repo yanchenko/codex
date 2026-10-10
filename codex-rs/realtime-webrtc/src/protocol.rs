@@ -101,6 +101,8 @@ pub const RUNTIME_ENVIRONMENT: [(&str, &str); 7] = [
 pub enum Message {
     Hello { protocol: u32, build_commit: String },
     Ready {},
+    AcquireLeaseGuard { proof: crate::NativeLeaseProof },
+    LeaseGuardAcquired {},
     InitializeRuntime {},
     RuntimeReady {},
     StartTransport {},

@@ -966,8 +966,15 @@ impl App {
             AppCommand::RealtimeConversationStart {
                 thread_id: realtime_thread_id,
                 offer_sdp,
+                voice: allocated_voice,
+                managed,
             } => {
                 if *realtime_thread_id != thread_id {
+                    return Ok(true);
+                }
+                if let Some(identity) = managed
+                    && !self.chat_widget.managed_start_is_current(identity)
+                {
                     return Ok(true);
                 }
                 let model = self
@@ -975,8 +982,12 @@ impl App {
                     .config_ref()
                     .experimental_realtime_ws_model
                     .clone();
-                let voices = self.realtime_voices(app_server).await?;
-                let voice = self.effective_realtime_voice(app_server, &voices).await?;
+                let voice = if let Some(voice) = allocated_voice {
+                    Some(*voice)
+                } else {
+                    let voices = self.realtime_voices(app_server).await?;
+                    self.effective_realtime_voice(app_server, &voices).await?
+                };
                 app_server
                     .thread_realtime_start(
                         *realtime_thread_id,

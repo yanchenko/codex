@@ -159,6 +159,8 @@ async fn check_remote_voice_start(
         AppEvent::CodexOp(Op::RealtimeConversationStart {
             thread_id,
             offer_sdp: String::from("v=0\r\n").into(),
+            voice: None,
+            managed: None,
         }),
     ))
     .await?;
@@ -1788,6 +1790,8 @@ async fn remote_voice_config_read_failure_does_not_start_with_local_voice() -> R
             &AppCommand::RealtimeConversationStart {
                 thread_id,
                 offer_sdp: String::from("v=0\r\n").into(),
+                voice: None,
+                managed: None,
             },
         )
         .await
@@ -1856,6 +1860,8 @@ async fn embedded_voice_settings_follow_project_after_thread_switch() -> Result<
             &AppCommand::RealtimeConversationStart {
                 thread_id,
                 offer_sdp: String::from("v=0\r\n").into(),
+                voice: None,
+                managed: None,
             },
         )
         .await?;
@@ -1975,6 +1981,8 @@ async fn remote_voice_catalog_success_and_failure() -> Result<()> {
                             AppEvent::CodexOp(Op::RealtimeConversationStart {
                                 thread_id,
                                 offer_sdp: String::from("v=0\r\n").into(),
+                                voice: None,
+                                managed: None,
                             }),
                         ))
                         .await?;
