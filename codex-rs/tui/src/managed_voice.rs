@@ -80,6 +80,7 @@ pub(crate) struct ManagedVoice {
     pub owner: ThreadId,
     sender: mpsc::Sender<Command>,
     epoch: Arc<Mutex<Option<u64>>>,
+    registration_backend: Arc<Mutex<RealtimeBackend>>,
 }
 impl ManagedVoice {
     pub fn new(owner: ThreadId, events: AppEventSender, backend: RealtimeBackend) -> Self {
@@ -99,6 +100,7 @@ impl ManagedVoice {
         let instance = Uuid::new_v4();
         let (sender, receiver) = mpsc::channel(8);
         let epoch = Arc::new(Mutex::new(None));
+        let registration_backend = Arc::new(Mutex::new(backend));
         tokio::spawn(run(
             instance,
             owner,
@@ -106,13 +108,14 @@ impl ManagedVoice {
             epoch.clone(),
             receiver,
             directory,
-            backend,
+            registration_backend.clone(),
         ));
         Self {
             instance,
             owner,
             sender,
             epoch,
+            registration_backend,
         }
     }
     pub fn epoch(&self) -> Option<u64> {
@@ -128,6 +131,12 @@ impl ManagedVoice {
         abort: AbortHandle,
         backend: RealtimeBackend,
     ) -> Result<(), String> {
+        // Registration can fail before an epoch exists (for example, a missing
+        // provider pool). A later start must update the reconnect preference too.
+        *self
+            .registration_backend
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = backend;
         let epoch = self
             .epoch()
             .ok_or("Voice coordinator is unavailable; configure a voice pool and try again.")?;
@@ -201,7 +210,7 @@ async fn run(
     epoch: Arc<Mutex<Option<u64>>>,
     mut commands: mpsc::Receiver<Command>,
     directory: std::path::PathBuf,
-    initial_backend: RealtimeBackend,
+    registration_backend: Arc<Mutex<RealtimeBackend>>,
 ) {
     let mut client: Option<Client> = None;
     let mut pending: Option<Pending> = None;
@@ -223,7 +232,13 @@ async fn run(
                     .instances
                     .get(&instance)
                     .map(|instance| instance.provider.clone())
-                    .unwrap_or_else(|| initial_backend.pool_key().to_owned());
+                    .unwrap_or_else(|| {
+                        registration_backend
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .pool_key()
+                            .to_owned()
+                    });
                 let state = client
                     .request(Operation::Register {
                         instance,
@@ -508,6 +523,66 @@ mod tests {
         })
         .await
         .unwrap()
+    }
+
+    #[tokio::test]
+    async fn missing_initial_pool_can_recover_with_a_different_backend() {
+        let (temp, mut admin, existing, _events, server) = setup().await;
+        let (send, mut events) = mpsc::unbounded_channel();
+        let managed = ManagedVoice::in_directory(
+            ThreadId::new(),
+            AppEventSender::new(send),
+            temp.path().join("control"),
+            RealtimeBackend::Gemini,
+        );
+        let instance = managed.instance;
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if let Some(AppEvent::ManagedVoice {
+                    event: Event::Unavailable(_),
+                    ..
+                }) = events.recv().await
+                {
+                    break;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert!(managed.epoch().is_none());
+        assert!(
+            !admin
+                .snapshot()
+                .await
+                .unwrap()
+                .instances
+                .contains_key(&instance)
+        );
+        let (abort, _) = AbortHandle::new_pair();
+        assert!(
+            managed
+                .reserve(1, None, abort, RealtimeBackend::Openai)
+                .is_err()
+        );
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while managed.epoch().is_none() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(managed.instance, instance);
+        let (abort, _) = AbortHandle::new_pair();
+        managed
+            .reserve(2, None, abort, RealtimeBackend::Openai)
+            .unwrap();
+        let admitted = admission(&mut events, 2).await.unwrap();
+        assert_eq!(admitted.lease.provider, "openai");
+        assert_eq!(admitted.lease.voice, "cove");
+        assert!(!admin.snapshot().await.unwrap().pools.contains_key("gemini"));
+        drop(admitted);
+        drop((managed, existing));
+        server.abort();
     }
 
     #[tokio::test]
