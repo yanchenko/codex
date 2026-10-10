@@ -14,14 +14,14 @@ fn realtime_offer_is_redacted_in_diagnostics_and_preserved_for_signaling() {
     let command = AppCommand::RealtimeConversationStart {
         thread_id,
         offer_sdp: original_offer.clone().into(),
-        voice: None,
         managed: None,
+        selection: None,
     };
 
     assert_eq!(
         format!("{command:?}"),
         format!(
-            "RealtimeConversationStart {{ thread_id: {thread_id:?}, offer_sdp: <redacted>, voice: None, managed: None }}"
+            "RealtimeConversationStart {{ thread_id: {thread_id:?}, offer_sdp: <redacted>, selection: None, managed: None }}"
         )
     );
     assert_eq!(

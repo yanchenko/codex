@@ -4509,6 +4509,10 @@ impl Config {
                     let defaults = RealtimeConfig::default();
                     RealtimeConfig {
                         managed_voice: realtime.managed_voice.unwrap_or(false),
+                        backend: realtime.backend,
+                        openai: realtime.openai,
+                        gemini: realtime.gemini,
+                        local_adapter: realtime.local_adapter,
                         version: realtime.version.unwrap_or(defaults.version),
                         session_type: realtime.session_type.unwrap_or(defaults.session_type),
                         transport: realtime.transport.unwrap_or(defaults.transport),

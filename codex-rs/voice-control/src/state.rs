@@ -96,6 +96,13 @@ pub enum Operation {
         call: Call,
         epoch: u64,
     },
+    /// Freeze the selected backend atomically with allocation, preserving the
+    /// bound owner even when a Caps start is already queued.
+    ReserveForProvider {
+        call: Call,
+        epoch: u64,
+        provider: String,
+    },
     Active {
         call: Call,
         epoch: u64,
@@ -315,6 +322,31 @@ impl Registry {
                         lease.phase = Phase::Stopping;
                     }
                 }
+            }
+            Operation::ReserveForProvider {
+                call,
+                epoch,
+                provider,
+            } => {
+                identifier(&provider)?;
+                ensure!(
+                    self.pools.contains_key(&provider),
+                    "provider pool is not configured"
+                );
+                if let Some(previous) = self.leases.get(&call.instance) {
+                    ensure!(
+                        previous.provider == provider,
+                        "reservation provider mismatch"
+                    );
+                } else {
+                    // All epoch/owner/lifecycle checks run below on the same
+                    // transition copy; any error rolls this change back.
+                    self.instances
+                        .get_mut(&call.instance)
+                        .ok_or_else(|| anyhow::anyhow!("unknown instance"))?
+                        .provider = provider;
+                }
+                self.apply(Operation::Reserve { call, epoch })?;
             }
             Operation::Reserve { call, epoch } => {
                 ensure!(epoch == self.epoch, "stale admission epoch");

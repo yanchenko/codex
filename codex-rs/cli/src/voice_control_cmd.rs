@@ -76,20 +76,29 @@ pub(crate) async fn run(args: VoiceControlCommand) -> anyhow::Result<()> {
         Command::Serve | Command::Caps { .. } => unreachable!(),
         Command::Status => None,
         Command::Pool { provider, voices } => {
-            anyhow::ensure!(
-                provider == "openai",
-                "provider voice routing is not integrated: {provider}"
-            );
-            for voice in &voices {
-                let parsed = serde_json::from_value::<RealtimeVoice>(serde_json::Value::String(
-                    voice.clone(),
-                ))
-                .map_err(|_| anyhow::anyhow!("unsupported OpenAI voice: {voice}"))?;
-                anyhow::ensure!(
-                    RealtimeVoicesList::builtin().v3.contains(&parsed),
-                    "OpenAI voice {voice} is unavailable for the managed WebRTC V3 backend"
-                );
-            }
+            match provider.as_str() {
+                "openai" => {
+                    for voice in &voices {
+                        let parsed = serde_json::from_value::<RealtimeVoice>(
+                            serde_json::Value::String(voice.clone()),
+                        )
+                        .map_err(|_| anyhow::anyhow!("unsupported OpenAI voice: {voice}"))?;
+                        anyhow::ensure!(
+                            RealtimeVoicesList::builtin().v3.contains(&parsed),
+                            "OpenAI voice {voice} is unavailable for the managed WebRTC V3 backend"
+                        );
+                    }
+                }
+                "gemini" => {
+                    for voice in &voices {
+                        anyhow::ensure!(
+                            codex_protocol::protocol::GEMINI_VOICES.contains(&voice.as_str()),
+                            "unsupported managed Gemini voice: {voice}"
+                        );
+                    }
+                }
+                _ => anyhow::bail!("provider voice routing is not integrated: {provider}"),
+            };
             Some(Operation::Configure { provider, voices })
         }
         Command::Bind { instance } => Some(Operation::Bind { instance }),

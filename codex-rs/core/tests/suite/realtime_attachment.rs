@@ -129,6 +129,7 @@ impl Drop for Sideband {
 
 fn params(session: &str, url: &str) -> ConversationStartParams {
     ConversationStartParams {
+        frontend: None,
         client_managed_handoffs: false,
         delegation_ack_filler: None,
         flush_transcript_tail_on_session_end: false,

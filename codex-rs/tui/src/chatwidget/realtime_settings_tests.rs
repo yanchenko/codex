@@ -340,3 +340,99 @@ async fn ambiguous_device_names_cannot_select_the_wrong_device() {
             .any(|event| matches!(event, AppEvent::PersistRealtimeDevice { .. }))
     );
 }
+
+#[tokio::test]
+async fn frontend_menus_select_provider_model_and_voice_without_starting_audio() {
+    use crate::realtime_frontend::FrontendSetting;
+    use codex_protocol::protocol::RealtimeBackend;
+    let (mut chat, _sender, mut events, mut ops) = make_chatwidget_manual_with_sender().await;
+    chat.config.realtime.backend = Some(RealtimeBackend::Gemini);
+    chat.config.realtime.gemini = Some(codex_config::config_toml::RealtimeGeminiConfig {
+        model: "gemini-test-live".into(),
+        models: vec!["gemini-other-live".into()],
+        voice: "Kore".into(),
+        api_key_env: "GEMINI_API_KEY".into(),
+    });
+    chat.open_realtime_backends();
+    insta::assert_snapshot!("voice_backend_choices", render_bottom_popup(&chat, 80));
+    chat.open_realtime_models();
+    insta::assert_snapshot!("voice_gemini_models", render_bottom_popup(&chat, 80));
+    chat.bottom_pane
+        .handle_key_event(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
+    chat.bottom_pane
+        .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(std::iter::from_fn(|| events.try_recv().ok()).any(|event| matches!(event, AppEvent::PersistRealtimeFrontend { setting: FrontendSetting::Model { backend: RealtimeBackend::Gemini, model: Some(model) } } if model == "gemini-other-live")));
+    chat.open_gemini_voices();
+    chat.bottom_pane
+        .handle_key_event(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
+    chat.bottom_pane
+        .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(std::iter::from_fn(|| events.try_recv().ok()).any(|event| matches!(event, AppEvent::PersistRealtimeFrontend { setting: FrontendSetting::GeminiVoice(voice) } if voice == "Achernar")));
+    assert!(ops.try_recv().is_err());
+    assert!(!chat.realtime_conversation_is_running());
+    assert_eq!(chat.config.realtime.gemini.as_ref().unwrap().voice, "Kore");
+}
+
+#[tokio::test]
+async fn missing_gemini_configuration_disables_backend_selection() {
+    let (mut chat, _sender, mut events, mut ops) = make_chatwidget_manual_with_sender().await;
+    chat.open_realtime_backends();
+    while events.try_recv().is_ok() {}
+    insta::assert_snapshot!("voice_backend_unconfigured", render_bottom_popup(&chat, 80));
+    chat.bottom_pane
+        .handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    chat.bottom_pane
+        .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(
+        !std::iter::from_fn(|| events.try_recv().ok())
+            .any(|event| matches!(event, AppEvent::PersistRealtimeFrontend { .. }))
+    );
+    assert!(ops.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn explicit_openai_model_row_ignores_legacy_override() {
+    let (mut chat, _sender, _events, _ops) = make_chatwidget_manual_with_sender().await;
+    chat.config.realtime.backend = Some(codex_protocol::protocol::RealtimeBackend::Openai);
+    chat.config.experimental_realtime_ws_model = Some("stale-legacy-model".into());
+    chat.open_realtime_settings();
+    let popup = render_bottom_popup(&chat, 80);
+    assert!(!popup.contains("stale-legacy-model"));
+    assert!(popup.contains("Server default"));
+    chat.config.realtime.backend = None;
+    chat.config.realtime.local_adapter =
+        Some(codex_config::config_toml::RealtimeLocalAdapterConfig {
+            base_url: "http://127.0.0.1:1234".into(),
+            bearer_token_env: "LOCAL_NONCE".into(),
+        });
+    chat.open_realtime_settings();
+    assert!(render_bottom_popup(&chat, 80).contains("Local adapter (legacy)"));
+}
+
+#[tokio::test]
+async fn managed_allocation_does_not_offer_an_ineffective_individual_voice_choice() {
+    let (mut chat, _sender, mut events, mut ops) = make_chatwidget_manual_with_sender().await;
+    chat.config.realtime.managed_voice = true;
+    chat.open_gemini_voices();
+    assert!(!chat.has_active_view());
+    chat.open_realtime_voices(
+        None,
+        codex_protocol::protocol::RealtimeVoicesList::builtin(),
+    );
+    assert!(!chat.has_active_view());
+    chat.open_realtime_settings();
+    chat.bottom_pane
+        .handle_key_event(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
+    chat.bottom_pane
+        .handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    chat.bottom_pane
+        .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(
+        !std::iter::from_fn(|| events.try_recv().ok()).any(|event| matches!(
+            event,
+            AppEvent::OpenRealtimeVoices | AppEvent::PersistRealtimeVoiceSelection { .. }
+        ))
+    );
+    assert!(ops.try_recv().is_err());
+    assert!(!chat.realtime_conversation_is_running());
+}

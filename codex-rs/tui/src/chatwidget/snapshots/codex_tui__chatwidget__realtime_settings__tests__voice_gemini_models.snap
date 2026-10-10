@@ -1,0 +1,14 @@
+---
+source: tui/src/chatwidget/realtime_settings_tests.rs
+expression: "render_bottom_popup(&chat, 80)"
+---
+  Voice model
+  Configured model choices; provider availability is checked when starting
+  voice.
+
+
+  1. gemini-other-live
+› 2. gemini-test-live (current)
+  3. Back
+
+  enter select · esc back

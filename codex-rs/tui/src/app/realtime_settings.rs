@@ -32,6 +32,134 @@ fn configured_voice(
 }
 
 impl App {
+    pub(super) async fn refresh_realtime_frontend(
+        &mut self,
+        app_server: &AppServerSession,
+    ) -> Result<bool> {
+        if let Some(response) = crate::config_update::read_effective_config_if_supported(
+            app_server.request_handle(),
+            &self.chat_widget.config_ref().cwd,
+        )
+        .await?
+        {
+            let mut value = response
+                .config
+                .additional
+                .get("realtime")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!({}));
+            let unknown_voice = value.get("voice").is_some_and(|voice| {
+                voice.is_string() && serde_json::from_value::<RealtimeVoice>(voice.clone()).is_err()
+            });
+            if unknown_voice {
+                value["voice"] = serde_json::Value::Null;
+            }
+            let settings: codex_config::config_toml::RealtimeToml = serde_json::from_value(value)?;
+            self.chat_widget.set_unknown_realtime_voice(unknown_voice);
+            self.config.realtime.backend = settings.backend;
+            self.config.realtime.openai = settings.openai;
+            self.config.realtime.gemini = settings.gemini;
+            self.config.realtime.voice = settings.voice;
+            self.chat_widget
+                .set_realtime_frontend_preferences(&self.config.realtime);
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
+    pub(super) async fn persist_realtime_frontend(
+        &mut self,
+        app_server: &AppServerSession,
+        setting: crate::realtime_frontend::FrontendSetting,
+    ) {
+        let (key, value) = setting.edit();
+        let previous = self.config.realtime.clone();
+        let mut edits = vec![crate::config_update::replace_config_value(
+            key,
+            value.clone(),
+        )];
+        if let crate::realtime_frontend::FrontendSetting::Model { backend, .. } = &setting {
+            edits.push(crate::config_update::replace_config_value(
+                "realtime.backend",
+                serde_json::json!(backend),
+            ));
+        }
+        let result =
+            crate::config_update::write_config_batch(app_server.request_handle(), edits).await;
+        match result {
+            Ok(response) => {
+                // A successful write does not mutate the already frozen active/startup attempt.
+                if let crate::realtime_frontend::FrontendSetting::Model { backend, .. } = &setting {
+                    self.config.realtime.backend = Some(*backend);
+                }
+                match &setting {
+                    crate::realtime_frontend::FrontendSetting::Backend(backend) => {
+                        self.config.realtime.backend = Some(*backend)
+                    }
+                    crate::realtime_frontend::FrontendSetting::Model {
+                        backend: codex_protocol::protocol::RealtimeBackend::Openai,
+                        model,
+                    } => self.config.realtime.openai.model = model.clone(),
+                    crate::realtime_frontend::FrontendSetting::Model {
+                        backend: codex_protocol::protocol::RealtimeBackend::Gemini,
+                        model: Some(model),
+                    } => {
+                        if let Some(config) = &mut self.config.realtime.gemini {
+                            config.model = model.clone();
+                        }
+                    }
+                    crate::realtime_frontend::FrontendSetting::GeminiVoice(voice) => {
+                        if let Some(config) = &mut self.config.realtime.gemini {
+                            config.voice = voice.clone();
+                        }
+                    }
+                    _ => {}
+                }
+                self.chat_widget
+                    .set_realtime_frontend_preferences(&self.config.realtime);
+                match self.refresh_realtime_frontend(app_server).await {
+                    Ok(false)
+                        if response.status
+                            == codex_app_server_protocol::WriteStatus::OkOverridden =>
+                    {
+                        self.config.realtime = previous;
+                        self.chat_widget
+                            .set_realtime_frontend_preferences(&self.config.realtime);
+                        self.chat_widget.add_error_message("Voice preference was saved but is overridden; this server cannot read effective settings.".into());
+                        return;
+                    }
+                    Err(error) => {
+                        self.config.realtime = previous;
+                        self.chat_widget
+                            .set_realtime_frontend_preferences(&self.config.realtime);
+                        self.chat_widget.add_error_message(format!("Voice preference was saved, but effective settings could not be read: {error}"));
+                        return;
+                    }
+                    _ => {}
+                }
+                let settings = serde_json::to_value(&self.config.realtime).unwrap_or_default();
+                let actual = key
+                    .strip_prefix("realtime.")
+                    .unwrap_or(key)
+                    .split('.')
+                    .try_fold(&settings, |value, part| value.get(part));
+                if actual == Some(&value)
+                    && response.status != codex_app_server_protocol::WriteStatus::OkOverridden
+                {
+                    self.chat_widget.add_info_message(
+                        "Voice preference saved. Applies to your next voice conversation.".into(),
+                        None,
+                    );
+                } else {
+                    self.chat_widget.add_error_message("Voice preference was saved but is overridden by another configuration layer.".into());
+                }
+            }
+            Err(error) => self
+                .chat_widget
+                .add_error_message(format!("Failed to save voice preference: {error}")),
+        }
+    }
+
     pub(super) async fn persist_realtime_input_channel(
         &mut self,
         channel: Option<MicrophoneChannels>,
@@ -214,6 +342,12 @@ impl App {
     }
 
     pub(super) async fn open_realtime_voices(&mut self, app_server: &AppServerSession) {
+        if self.chat_widget.config_ref().realtime.backend
+            == Some(codex_protocol::protocol::RealtimeBackend::Gemini)
+        {
+            self.chat_widget.open_gemini_voices();
+            return;
+        }
         let voices = match self.realtime_voices(app_server).await {
             Ok(voices) => voices,
             Err(error) => {

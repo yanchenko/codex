@@ -68,6 +68,7 @@ async fn natural_close_finishes_before_successor_and_ignores_old_identity() {
         event_parser: RealtimeEventParser::V1,
     };
     let connection = |identity, input_task, stop_token, session: &str| ConversationState {
+        gateway: None,
         session_id: Some(session.to_owned()),
         sub_id: session.to_owned(),
         audio_tx: bounded(1).0,
@@ -490,4 +491,122 @@ fn realtime_headers_include_only_non_default_originator() {
             expected_header
         );
     }
+}
+
+fn frontend_start_params() -> codex_protocol::protocol::ConversationStartParams {
+    use codex_protocol::protocol::*;
+    ConversationStartParams {
+        frontend: None,
+        client_managed_handoffs: true,
+        delegation_ack_filler: None,
+        flush_transcript_tail_on_session_end: false,
+        codex_responses_as_items: false,
+        codex_response_item_prefix: None,
+        codex_response_handoff_mode: Default::default(),
+        backend_reasoning_status: false,
+        codex_response_handoff_channel_prefixes: None,
+        model: None,
+        output_modality: RealtimeOutputModality::Audio,
+        include_startup_context: false,
+        initial_items: vec![],
+        realtime_start_instructions: None,
+        realtime_end_instructions: None,
+        prompt: None,
+        realtime_session_id: None,
+        transport: Some(ConversationStartTransport::Webrtc { sdp: "v=0".into() }),
+        version: Some(RealtimeConversationVersion::V3),
+        voice: None,
+    }
+}
+
+#[tokio::test]
+async fn explicit_openai_bypasses_unavailable_legacy_adapter_without_reading_its_nonce() {
+    use codex_protocol::protocol::RealtimeBackend;
+    use codex_protocol::protocol::RealtimeFrontend;
+    let (sess, _turn, _events) =
+        crate::session::tests::make_session_and_context_with_auth_and_config_and_rx(
+            codex_login::CodexAuth::from_api_key("test-key"),
+            vec![],
+            |config| {
+                config.realtime.local_adapter =
+                    Some(codex_config::config_toml::RealtimeLocalAdapterConfig {
+                        base_url: "http://127.0.0.1:1".into(),
+                        bearer_token_env: "CODEX_TEST_MISSING_GEMINI_NONCE".into(),
+                    });
+            },
+        )
+        .await;
+    let mut params = frontend_start_params();
+    params.frontend = Some(RealtimeFrontend {
+        backend: RealtimeBackend::Openai,
+        voice: None,
+    });
+    let prepared = super::prepare_realtime_start(&sess, params).await.unwrap();
+    assert!(prepared.local_adapter.is_none());
+    assert!(prepared.gateway.is_none());
+    assert!(!prepared.api_provider.base_url.contains("127.0.0.1:1"));
+}
+
+#[tokio::test]
+async fn gemini_rejects_missing_capability_and_existing_call_before_launching_a_helper() {
+    use codex_protocol::protocol::ConversationStartTransport;
+    use codex_protocol::protocol::RealtimeBackend;
+    use codex_protocol::protocol::RealtimeFrontend;
+    let (sess, _turn, _events) = crate::session::tests::make_session_and_context_with_rx().await;
+    let mut params = frontend_start_params();
+    params.frontend = Some(RealtimeFrontend {
+        backend: RealtimeBackend::Gemini,
+        voice: Some("Kore".into()),
+    });
+    let error = super::prepare_realtime_start(&sess, params.clone())
+        .await
+        .err()
+        .unwrap()
+        .to_string();
+    assert!(error.contains("Configure realtime.gemini"), "{error}");
+    params.transport = Some(ConversationStartTransport::ExistingCall {
+        call_id: "rtc_test".into(),
+        sideband_base_url: None,
+    });
+    let error = super::prepare_realtime_start(&sess, params)
+        .await
+        .err()
+        .unwrap()
+        .to_string();
+    assert!(error.contains("existing call"), "{error}");
+}
+
+#[tokio::test]
+async fn gemini_rejects_startup_history_before_credentials_or_process_launch() {
+    use codex_protocol::protocol::RealtimeBackend;
+    use codex_protocol::protocol::RealtimeFrontend;
+    let (sess, _turn, _events) =
+        crate::session::tests::make_session_and_context_with_auth_and_config_and_rx(
+            codex_login::CodexAuth::from_api_key("test-key"),
+            vec![],
+            |config| {
+                config.realtime.gemini = Some(codex_config::config_toml::RealtimeGeminiConfig {
+                    model: "gemini-test-live".into(),
+                    models: vec![],
+                    voice: "Kore".into(),
+                    api_key_env: "CODEX_TEST_UNSET_GEMINI_KEY".into(),
+                });
+            },
+        )
+        .await;
+    let mut params = frontend_start_params();
+    params.frontend = Some(RealtimeFrontend {
+        backend: RealtimeBackend::Gemini,
+        voice: None,
+    });
+    params.initial_items.push(ConversationTextParams {
+        role: ConversationTextRole::User,
+        text: "history".into(),
+    });
+    let error = super::prepare_realtime_start(&sess, params)
+        .await
+        .err()
+        .unwrap()
+        .to_string();
+    assert!(error.contains("initialItems"), "{error}");
 }

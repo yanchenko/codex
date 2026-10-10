@@ -174,8 +174,73 @@ pub struct W3cTraceContext {
     pub tracestate: Option<String>,
 }
 
+/// Voice frontend only; independent of the coding model/provider.
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum RealtimeBackend {
+    #[default]
+    Openai,
+    Gemini,
+}
+
+impl RealtimeBackend {
+    pub fn pool_key(self) -> &'static str {
+        match self {
+            Self::Openai => "openai",
+            Self::Gemini => "gemini",
+        }
+    }
+}
+
+// Native Live voices follow the public prebuilt TTS catalog. Custom/newer names
+// remain opaque in the protocol and a configured current voice stays selectable.
+// https://ai.google.dev/gemini-api/docs/live-api/capabilities#change-voice-and-language
+pub const GEMINI_VOICES: &[&str] = &[
+    "Achernar",
+    "Achird",
+    "Algenib",
+    "Algieba",
+    "Alnilam",
+    "Aoede",
+    "Autonoe",
+    "Callirrhoe",
+    "Charon",
+    "Despina",
+    "Enceladus",
+    "Erinome",
+    "Fenrir",
+    "Gacrux",
+    "Iapetus",
+    "Kore",
+    "Laomedeia",
+    "Leda",
+    "Orus",
+    "Puck",
+    "Pulcherrima",
+    "Rasalgethi",
+    "Sadachbia",
+    "Sadaltager",
+    "Schedar",
+    "Sulafat",
+    "Umbriel",
+    "Vindemiatrix",
+    "Zephyr",
+    "Zubenelgenubi",
+];
+
+/// Per-call selection. URLs and credentials remain trusted server configuration.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RealtimeFrontend {
+    pub backend: RealtimeBackend,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub voice: Option<String>,
+}
+
 #[derive(Clone, PartialEq)]
 pub struct ConversationStartParams {
+    pub frontend: Option<RealtimeFrontend>,
     /// Whether Codex response handoffs are managed through explicit client append calls.
     pub client_managed_handoffs: bool,
     /// Whether a realtime V3 delegation produces an acknowledgement filler.

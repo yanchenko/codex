@@ -195,6 +195,10 @@ impl From<ThreadRealtimeAudioChunk> for CoreRealtimeAudioFrame {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadRealtimeStartParams {
+    /// Per-call voice frontend; never changes the coding model or accepts credentials/endpoints.
+    #[ts(optional = nullable)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frontend: Option<codex_protocol::protocol::RealtimeFrontend>,
     pub thread_id: String,
     /// Leaves Codex response handoffs to the client's explicit append calls instead of forwarding
     /// them automatically. Defaults to false.

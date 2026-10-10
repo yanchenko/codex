@@ -28,6 +28,7 @@ const MULTIPART_CONTENT_TYPE: &str = "multipart/form-data; boundary=codex-realti
 
 pub struct RealtimeCallClient<T: HttpTransport> {
     session: EndpointSession<T>,
+    local_gemini: Option<Value>,
 }
 
 /// Answer from creating a WebRTC Realtime call.
@@ -50,13 +51,20 @@ impl<T: HttpTransport> RealtimeCallClient<T> {
     pub fn new(transport: T, provider: Provider, auth: SharedAuthProvider) -> Self {
         Self {
             session: EndpointSession::new(transport, provider, auth),
+            local_gemini: None,
         }
     }
 
     pub fn with_telemetry(self, request: Option<Arc<dyn RequestTelemetry>>) -> Self {
         Self {
             session: self.session.with_request_telemetry(request),
+            local_gemini: self.local_gemini,
         }
+    }
+
+    pub(crate) fn with_local_gemini(mut self, metadata: Option<Value>) -> Self {
+        self.local_gemini = metadata;
+        self
     }
 
     fn path() -> &'static str {
@@ -142,6 +150,9 @@ impl<T: HttpTransport> RealtimeCallClient<T> {
         let mut session = realtime_session_json(session_config)?;
         if let Some(session) = session.as_object_mut() {
             session.remove("id");
+            if let Some(metadata) = &self.local_gemini {
+                session.insert("gemini".into(), metadata.clone());
+            }
         }
         // TODO(aibrahim): Align the SIWC route with the API multipart shape and remove this branch.
         if self.uses_backend_request_shape() {

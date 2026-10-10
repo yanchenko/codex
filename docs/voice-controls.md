@@ -2,7 +2,7 @@
 
 This experimental CLI extension assigns a free voice to each managed local native voice call. It does not change the coding model or cancel coding tasks when voice stops. Ordinary voice behavior remains unchanged unless enabled.
 
-The current per-start routing supports the OpenAI backend. Custom realtime endpoints are refused when managed allocation is enabled; Gemini requires the separate provider catalog/per-call integration. Allocation code cross-compiles for macOS, Linux and Windows; Windows/Linux execution has not been verified. Caps hardware is implemented only for macOS and still requires physical permission/keyboard QA.
+This integration supports separate OpenAI and Gemini Live voice pools. Custom realtime endpoints and legacy local adapters are refused when managed allocation is enabled. Allocation code cross-compiles for macOS, Linux and Windows; Windows/Linux execution has not been verified. Caps hardware is implemented only for macOS and still requires physical permission/keyboard QA.
 
 ## Enable allocation
 
@@ -10,12 +10,17 @@ Use the same built CLI for every participating terminal. Configure a pool before
 
 ```sh
 codex voice-control pool --provider openai cove maple
+codex voice-control pool --provider gemini Kore Aoede
 codex -c realtime.managed_voice=true
 ```
 
 Enable the existing realtime feature in your normal configuration if it is not already enabled. After a thread opens, `codex voice-control status` lists its enrolled UUID and owner. Terminal voice shortcuts and `/voice` pass through the same reservation gate. Two occupied calls cannot receive the same pool entry; pool exhaustion refuses startup. Stop/close a call and wait for native retirement before expecting its voice to become free.
 
+Configure Gemini as described in [Gemini Live](gemini-live.md), then choose the backend/model in `/voice settings`. Managed calls override the individual voice preference with a free voice from that backend's pool. The voice picker is disabled while allocation is enabled. Backend/model selection is frozen before admission; changing settings cannot relabel an active lease. The explicitly bound owner stays bound across backend changes. OpenAI pool entries must belong to the built-in WebRTC V3 catalog; Gemini entries must belong to the shared built-in Gemini voice catalog.
+
 The coordinator is shared per OS user, independently of `CODEX_HOME`. `CODEX_VOICE_CONTROL_DIR` overrides its private runtime directory for isolated testing; all participating processes must use the same value. Do not delete its journal or lease files to resolve an occupied/unknown voice: that removes the evidence required for safe recovery.
+
+The combined build uses coordinator protocol version 2. Use an isolated `CODEX_VOICE_CONTROL_DIR` for comparison with older PR3 packages, or stop all calls and stop the old coordinator before using the new CLI. Incompatible peers fail with a restart diagnostic. Do not remove occupied lease files to bypass compatibility or retirement checks.
 
 ## Global lifecycle controls
 

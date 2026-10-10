@@ -1229,6 +1229,8 @@ impl TurnRequestProcessor {
                 .is_some_and(|items| !items.is_empty())
             {
                 Some("initialItems")
+            } else if params.frontend.is_some() {
+                Some("frontend")
             } else if params.model.is_some() {
                 Some("model")
             } else if params.voice.is_some() {
@@ -1254,6 +1256,7 @@ impl TurnRequestProcessor {
             request_id,
             thread.as_ref(),
             Op::RealtimeConversationStart(ConversationStartParams {
+                frontend: params.frontend,
                 client_managed_handoffs: params.client_managed_handoffs.unwrap_or(false),
                 delegation_ack_filler: params.delegation_ack_filler,
                 flush_transcript_tail_on_session_end: params

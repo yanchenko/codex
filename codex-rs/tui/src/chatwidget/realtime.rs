@@ -136,7 +136,6 @@ enum StartupRetry {
 #[derive(Default)]
 pub(super) struct RealtimeConversationUiState {
     managed: Option<crate::managed_voice::ManagedVoice>,
-    managed_voice: Option<codex_protocol::protocol::RealtimeVoice>,
     managed_epoch: Option<u64>,
     external_start_epoch: Option<u64>,
     pending_native: Option<(
@@ -144,6 +143,7 @@ pub(super) struct RealtimeConversationUiState {
         codex_realtime_webrtc::AudioDeviceSelection,
     )>,
     enrollment_error_reported: bool,
+    frontend_selection: Option<crate::realtime_frontend::RealtimeCallSelection>,
     startup_retry: StartupRetry,
     pub(super) phase: RealtimeConversationPhase,
     recover_late_transcripts: bool,
@@ -322,7 +322,48 @@ impl ChatWidget {
     }
 
     fn start_realtime_conversation(&mut self, thread_id: ThreadId) {
+        if self.config.realtime.managed_voice
+            && (self.config.realtime.local_adapter.is_some()
+                || self.config.experimental_realtime_ws_base_url.is_some()
+                || self
+                    .config
+                    .experimental_realtime_webrtc_call_base_url
+                    .is_some())
+        {
+            self.add_realtime_error(
+                "Managed voice requires a built-in backend without custom realtime endpoints."
+                    .into(),
+            );
+            return;
+        }
         self.enroll_managed_voice();
+        let selection = match crate::realtime_frontend::RealtimeCallSelection::capture(
+            &self.config.realtime,
+            self.realtime_openai_voice_unknown,
+        ) {
+            Ok(selection) => selection,
+            Err(error) => {
+                self.add_realtime_error(error);
+                return;
+            }
+        };
+        // The legacy OpenAI path normally defers model selection to dispatch.
+        // Managed admission freezes it too, before waiting for a pool lease.
+        self.realtime_conversation.frontend_selection = if self.config.realtime.managed_voice {
+            Some(
+                selection.unwrap_or_else(|| crate::realtime_frontend::RealtimeCallSelection {
+                    frontend: codex_protocol::protocol::RealtimeFrontend {
+                        backend: codex_protocol::protocol::RealtimeBackend::Openai,
+                        voice: None,
+                    },
+                    model: self.config.experimental_realtime_ws_model.clone(),
+                    voice: None,
+                    omit_openai_voice: false,
+                }),
+            )
+        } else {
+            selection
+        };
         let Some(audio) = self.realtime_audio_settings() else {
             return;
         };
@@ -361,7 +402,18 @@ impl ChatWidget {
                 .managed
                 .as_ref()
                 .ok_or_else(|| "Managed voice could not enroll this provider/owner.".to_owned())
-                .and_then(|managed| managed.reserve(attempt_id, expected, startup_abort));
+                .and_then(|managed| {
+                    managed.reserve(
+                        attempt_id,
+                        expected,
+                        startup_abort,
+                        self.realtime_conversation
+                            .frontend_selection
+                            .as_ref()
+                            .map(|selection| selection.frontend.backend)
+                            .unwrap_or_default(),
+                    )
+                });
             if let Err(error) = result {
                 self.on_realtime_error(error);
             }
@@ -486,7 +538,6 @@ impl ChatWidget {
         if !self.submit_op(AppCommand::RealtimeConversationStart {
             thread_id,
             offer_sdp: offer.offer_sdp.into(),
-            voice: self.realtime_conversation.managed_voice,
             managed: self
                 .realtime_conversation
                 .managed
@@ -500,6 +551,7 @@ impl ChatWidget {
                         }
                     })
                 }),
+            selection: self.realtime_conversation.frontend_selection.clone(),
         }) {
             self.record_realtime_failure();
             self.reset_realtime_conversation();

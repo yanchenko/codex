@@ -392,6 +392,7 @@ impl RealtimeE2eHarness {
         let start_request_id = self
             .mcp
             .send_thread_realtime_start_request(ThreadRealtimeStartParams {
+                frontend: None,
                 client_managed_handoffs,
                 delegation_ack_filler,
                 flush_transcript_tail_on_session_end: None,
@@ -454,6 +455,7 @@ impl RealtimeE2eHarness {
         let start_request_id = self
             .mcp
             .send_thread_realtime_start_request(ThreadRealtimeStartParams {
+                frontend: None,
                 thread_id: self.thread_id.clone(),
                 client_managed_handoffs: None,
                 delegation_ack_filler: None,
@@ -494,6 +496,7 @@ impl RealtimeE2eHarness {
         let start_request_id = self
             .mcp
             .send_thread_realtime_start_request(ThreadRealtimeStartParams {
+                frontend: None,
                 thread_id: self.thread_id.clone(),
                 client_managed_handoffs: None,
                 delegation_ack_filler: None,
@@ -712,6 +715,7 @@ async fn realtime_conversation_streams_timeline_items() -> Result<()> {
         timeout(DEFAULT_TIMEOUT, mcp.read_response(thread_request)).await??;
     let request = mcp
         .send_thread_realtime_start_request(ThreadRealtimeStartParams {
+            frontend: None,
             thread_id: thread.thread.id.clone(),
             client_managed_handoffs: None,
             delegation_ack_filler: None,
@@ -910,6 +914,7 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
 
     let start_request_id = mcp
         .send_thread_realtime_start_request(ThreadRealtimeStartParams {
+            frontend: None,
             client_managed_handoffs: None,
             delegation_ack_filler: None,
             flush_transcript_tail_on_session_end: None,
@@ -1480,6 +1485,7 @@ async fn realtime_start_can_skip_startup_context() -> Result<()> {
 
     let start_request_id = mcp
         .send_thread_realtime_start_request(ThreadRealtimeStartParams {
+            frontend: None,
             client_managed_handoffs: None,
             delegation_ack_filler: None,
             flush_transcript_tail_on_session_end: None,
@@ -1578,6 +1584,7 @@ async fn realtime_text_output_modality_requests_text_output_and_final_transcript
 
     let start_request_id = mcp
         .send_thread_realtime_start_request(ThreadRealtimeStartParams {
+            frontend: None,
             client_managed_handoffs: None,
             delegation_ack_filler: None,
             flush_transcript_tail_on_session_end: None,
@@ -1795,6 +1802,7 @@ async fn realtime_conversation_stop_emits_closed_notification(
 
     let start_request_id = mcp
         .send_thread_realtime_start_request(ThreadRealtimeStartParams {
+            frontend: None,
             client_managed_handoffs: None,
             delegation_ack_filler: None,
             flush_transcript_tail_on_session_end: Some(true),
@@ -1953,6 +1961,7 @@ async fn realtime_mode_uses_client_instructions_on_entry_and_exit() -> Result<()
     let start_request_id = harness
         .mcp
         .send_thread_realtime_start_request(ThreadRealtimeStartParams {
+            frontend: None,
             thread_id: harness.thread_id.clone(),
             client_managed_handoffs: None,
             delegation_ack_filler: None,
@@ -2239,6 +2248,7 @@ async fn realtime_webrtc_start_emits_sdp_notification() -> Result<()> {
     let thread_id = thread_start.thread.id;
     let start_request_id = mcp
         .send_thread_realtime_start_request(ThreadRealtimeStartParams {
+            frontend: None,
             client_managed_handoffs: None,
             delegation_ack_filler: None,
             flush_transcript_tail_on_session_end: None,
@@ -2458,6 +2468,7 @@ async fn existing_call_attaches_without_reinitializing_the_client_session(
     let request_id = harness
         .mcp
         .send_thread_realtime_start_request(ThreadRealtimeStartParams {
+            frontend: None,
             thread_id: harness.thread_id.clone(),
             client_managed_handoffs: None,
             delegation_ack_filler: None,
@@ -2547,6 +2558,7 @@ async fn existing_call_rejects_client_owned_session_configuration(option: &str) 
     )
     .await?;
     let mut params = ThreadRealtimeStartParams {
+        frontend: None,
         thread_id: harness.thread_id.clone(),
         client_managed_handoffs: None,
         delegation_ack_filler: None,
@@ -4067,6 +4079,7 @@ async fn realtime_webrtc_start_surfaces_backend_error() -> Result<()> {
 
     let start_request_id = mcp
         .send_thread_realtime_start_request(ThreadRealtimeStartParams {
+            frontend: None,
             client_managed_handoffs: None,
             delegation_ack_filler: None,
             flush_transcript_tail_on_session_end: None,

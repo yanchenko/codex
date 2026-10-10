@@ -19,13 +19,19 @@ test = false
 workspace = true
 
 [dependencies]
+axum = { workspace = true, features = ["http1", "tokio", "ws", "multipart", "json"] }
+base64 = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+tokio-tungstenite = { workspace = true }
 codex-process-hardening = { workspace = true }
+codex-utils-rustls-provider = { workspace = true }
 codex-realtime-webrtc = { workspace = true }
 futures = { workspace = true }
 libloading = "=0.8.9"
 rand = { workspace = true }
 rtc = "=0.20.3"
-tokio = { workspace = true, features = ["rt-multi-thread", "sync", "time"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "sync", "time", "net", "io-util", "macros"] }
 webrtc = "=0.20.3"
 
 [target.'cfg(any(target_os = "macos", all(target_os = "linux", target_env = "gnu"), all(windows, target_env = "msvc")))'.dependencies]

@@ -260,3 +260,116 @@ fn corrupt_journal_cannot_recover_an_empty_pool_or_duplicate_voice() {
     state.pools.get_mut("openai").unwrap().voices.clear();
     assert!(state.recover().is_err());
 }
+
+#[test]
+fn provider_selection_is_atomic_with_queued_start_and_preserves_binding() {
+    let mut state = setup(&["cove"]);
+    state = state
+        .transition(Operation::Configure {
+            provider: "gemini".into(),
+            voices: vec!["Kore".into(), "Aoede".into()],
+        })
+        .unwrap();
+    let call = register(&mut state);
+    state = state
+        .transition(Operation::Bind {
+            instance: call.instance,
+        })
+        .unwrap();
+    state = state
+        .transition(Operation::Start { epoch: state.epoch })
+        .unwrap();
+    state = state
+        .transition(Operation::ReserveForProvider {
+            call: call.clone(),
+            epoch: state.epoch,
+            provider: "gemini".into(),
+        })
+        .unwrap();
+    assert_eq!(state.bound, Some(call.instance));
+    assert_eq!(state.instances[&call.instance].provider, "gemini");
+    assert_eq!(state.leases[&call.instance].voice, "Kore");
+    assert!(!state.instances[&call.instance].start_requested);
+    assert!(
+        state
+            .transition(Operation::ReserveForProvider {
+                call: call.clone(),
+                epoch: state.epoch,
+                provider: "openai".into(),
+            })
+            .is_err()
+    );
+    state = state
+        .transition(Operation::Retired { call: call.clone() })
+        .unwrap();
+    state = state
+        .transition(Operation::ReserveForProvider {
+            call: Call {
+                generation: 2,
+                ..call.clone()
+            },
+            epoch: state.epoch,
+            provider: "openai".into(),
+        })
+        .unwrap();
+    assert_eq!(state.leases[&call.instance].voice, "cove");
+    assert_eq!(state.bound, Some(call.instance));
+    state.validate().unwrap();
+}
+
+#[test]
+fn provider_pool_exhaustion_and_off_never_relabel_or_duplicate_leases() {
+    // Identical names in different backends are separate provider voices.
+    let mut state = setup(&["shared"]);
+    state = state
+        .transition(Operation::Configure {
+            provider: "gemini".into(),
+            voices: vec!["shared".into()],
+        })
+        .unwrap();
+    let openai = register(&mut state);
+    let gemini = register(&mut state);
+    let exhausted = register(&mut state);
+    reserve(&mut state, &openai);
+    state = state
+        .transition(Operation::ReserveForProvider {
+            call: gemini,
+            epoch: state.epoch,
+            provider: "gemini".into(),
+        })
+        .unwrap();
+    assert_eq!(state.leases.len(), 2);
+    assert!(
+        state
+            .transition(Operation::ReserveForProvider {
+                call: exhausted.clone(),
+                epoch: state.epoch,
+                provider: "gemini".into(),
+            })
+            .is_err()
+    );
+    assert_eq!(state.instances[&exhausted.instance].provider, "openai");
+    let stale_epoch = state.epoch;
+    state = state.transition(Operation::GlobalOff).unwrap();
+    assert!(state.leases.values().all(|lease| lease.stop_requested));
+    assert!(
+        state
+            .transition(Operation::ReserveForProvider {
+                call: exhausted.clone(),
+                epoch: stale_epoch,
+                provider: "gemini".into(),
+            })
+            .is_err()
+    );
+    assert!(
+        state
+            .transition(Operation::ReserveForProvider {
+                call: exhausted.clone(),
+                epoch: state.epoch,
+                provider: "gemini".into(),
+            })
+            .is_err()
+    );
+    assert_eq!(state.instances[&exhausted.instance].provider, "openai");
+    state.validate().unwrap();
+}

@@ -2515,7 +2515,13 @@ impl App {
                 }
                 self.chat_widget.on_plugin_mentions_loaded(plugins);
             }
-            AppEvent::OpenRealtimeSettings => self.chat_widget.open_realtime_settings(),
+            AppEvent::OpenRealtimeSettings => {
+                if let Err(error) = self.refresh_realtime_frontend(app_server).await { self.chat_widget.add_error_message(format!("Failed to read voice settings: {error}")); }
+                else { self.chat_widget.open_realtime_settings(); }
+            }
+            AppEvent::OpenRealtimeBackends => self.chat_widget.open_realtime_backends(),
+            AppEvent::OpenRealtimeModels => self.chat_widget.open_realtime_models(),
+            AppEvent::PersistRealtimeFrontend { setting } => self.persist_realtime_frontend(app_server, setting).await,
             AppEvent::OpenRealtimeSoundDevices => self.chat_widget.open_realtime_sound_devices(),
             AppEvent::OpenRealtimeVoices => self.open_realtime_voices(app_server).await,
             AppEvent::OpenRealtimeDevicePicker { kind } => self.list_realtime_devices(kind),

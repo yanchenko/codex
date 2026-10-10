@@ -40,7 +40,7 @@ struct Coordinator {
 impl Coordinator {
     fn apply(&mut self, operation: Operation) -> Result<()> {
         let guard = match &operation {
-            Operation::Reserve { call, .. } => Some((
+            Operation::Reserve { call, .. } | Operation::ReserveForProvider { call, .. } => Some((
                 call.instance,
                 crate::guard::inspect_held(&self.store.directory, call)?,
             )),
@@ -178,6 +178,7 @@ async fn handle(
                             );
                         }
                         Operation::Reserve { call, .. }
+                        | Operation::ReserveForProvider { call, .. }
                         | Operation::Active { call, .. }
                         | Operation::Retired { call } => {
                             ensure!(
@@ -272,10 +273,12 @@ impl Client {
             operation,
         };
         timeout(IO_TIMEOUT, wire::write(&mut self.stream, &request)).await??;
-        let reply: Response = timeout(IO_TIMEOUT, wire::read(&mut self.stream)).await??;
+        let reply: Response = timeout(IO_TIMEOUT, wire::read(&mut self.stream))
+            .await?
+            .map_err(|error| anyhow::anyhow!("Voice coordinator connection failed ({error}); stop the old coordinator and restart with this CLI, or use an isolated CODEX_VOICE_CONTROL_DIR. Do not delete occupied lease files."))?;
         ensure!(
             reply.version == PROTOCOL_VERSION,
-            "unsupported voice-control protocol"
+            "unsupported voice-control protocol; stop the old coordinator and restart with this CLI, or use an isolated CODEX_VOICE_CONTROL_DIR; do not delete occupied lease files"
         );
         if let Some(error) = reply.error {
             anyhow::bail!("{error}");
@@ -434,28 +437,88 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn old_coordinator_response_or_disconnect_has_actionable_upgrade_error() {
+        for respond in [false, true] {
+            let temp = tempfile::tempdir().unwrap();
+            let directory = temp.path().join("control");
+            let _store = Store::open(&directory).await.unwrap();
+            let mut listener = UnixListener::bind(&directory.join("control.sock"))
+                .await
+                .unwrap();
+            let old = tokio::spawn(async move {
+                let mut stream = listener.accept().await.unwrap();
+                let request: Request = wire::read(&mut stream).await.unwrap();
+                assert_eq!(request.version, 2);
+                if respond {
+                    wire::write(
+                        &mut stream,
+                        &Response {
+                            version: 1,
+                            state: None,
+                            error: Some("old protocol".into()),
+                        },
+                    )
+                    .await
+                    .unwrap();
+                }
+            });
+            let mut client = Client::connect(&directory).await.unwrap();
+            let error = client.snapshot().await.unwrap_err().to_string();
+            assert!(error.contains("old coordinator"));
+            assert!(
+                error.contains("Do not delete occupied")
+                    || error.contains("do not delete occupied")
+            );
+            old.await.unwrap();
+        }
+    }
+
+    #[tokio::test]
     async fn concurrent_connections_allocate_distinct_voices_and_persist_before_ack() {
         let temp = tempfile::tempdir().unwrap();
         let directory = temp.path().join("control");
         let task = launch(&directory).await;
-        let _admin = configure(&directory).await;
+        let mut admin = configure(&directory).await;
+        admin
+            .request(Operation::Configure {
+                provider: "gemini".into(),
+                voices: vec!["Kore".into(), "Aoede".into()],
+            })
+            .await
+            .unwrap();
         let (mut first, a) = register(&directory).await;
         let (mut second, b) = register(&directory).await;
         let _guard_a = crate::LeaseGuard::create(&directory, &a).unwrap();
         let _guard_b = crate::LeaseGuard::create(&directory, &b).unwrap();
+        assert!(
+            admin
+                .request(Operation::ReserveForProvider {
+                    call: a.clone(),
+                    epoch: 0,
+                    provider: "gemini".into(),
+                })
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("registered owner")
+        );
         let (one, two) = tokio::join!(
-            first.request(Operation::Reserve {
+            first.request(Operation::ReserveForProvider {
                 call: a.clone(),
-                epoch: 0
+                epoch: 0,
+                provider: "gemini".into(),
             }),
-            second.request(Operation::Reserve {
+            second.request(Operation::ReserveForProvider {
                 call: b.clone(),
-                epoch: 0
+                epoch: 0,
+                provider: "gemini".into(),
             })
         );
         let one = one.unwrap();
         let two = two.unwrap();
         assert_ne!(one.leases[&a.instance].voice, two.leases[&b.instance].voice);
+        assert_eq!(one.leases[&a.instance].provider, "gemini");
+        assert_eq!(two.leases[&b.instance].provider, "gemini");
         let persisted: Registry =
             serde_json::from_reader(std::fs::File::open(directory.join("state.json")).unwrap())
                 .unwrap();

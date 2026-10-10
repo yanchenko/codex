@@ -51,20 +51,24 @@ impl ChatWidget {
         if self.realtime_conversation_is_running() {
             return;
         }
-        if self.config.experimental_realtime_ws_base_url.is_some()
+        if self.config.realtime.local_adapter.is_some()
+            || self.config.experimental_realtime_ws_base_url.is_some()
             || self
                 .config
                 .experimental_realtime_webrtc_call_base_url
                 .is_some()
         {
             if !self.realtime_conversation.enrollment_error_reported {
-                self.add_realtime_error("Managed voice allocation currently requires the OpenAI voice backend; custom endpoints need a provider-specific catalog.".into());
+                self.add_realtime_error("Managed voice allocation requires a built-in OpenAI or Gemini backend; custom realtime endpoints are not supported.".into());
                 self.realtime_conversation.enrollment_error_reported = true;
             }
             return;
         }
-        self.realtime_conversation.managed =
-            Some(ManagedVoice::new(owner, self.app_event_tx.clone()));
+        self.realtime_conversation.managed = Some(ManagedVoice::new(
+            owner,
+            self.app_event_tx.clone(),
+            self.config.realtime.backend.unwrap_or_default(),
+        ));
     }
 
     pub(crate) fn on_managed_voice_event(&mut self, instance: uuid::Uuid, event: Event) {
@@ -102,7 +106,19 @@ impl ChatWidget {
                 else {
                     return;
                 };
-                self.realtime_conversation.managed_voice = Some(admission.voice);
+                let applied = self
+                    .realtime_conversation
+                    .frontend_selection
+                    .as_mut()
+                    .ok_or_else(|| "Managed voice requires a frozen frontend selection.".to_owned())
+                    .and_then(|selection| {
+                        selection
+                            .apply_managed_voice(&admission.lease.provider, &admission.lease.voice)
+                    });
+                if let Err(error) = applied {
+                    self.on_realtime_error(error);
+                    return;
+                }
                 self.realtime_conversation.managed_epoch = Some(admission.lease.epoch);
                 self.spawn_realtime_native(
                     managed.owner,

@@ -966,7 +966,7 @@ impl App {
             AppCommand::RealtimeConversationStart {
                 thread_id: realtime_thread_id,
                 offer_sdp,
-                voice: allocated_voice,
+                selection,
                 managed,
             } => {
                 if *realtime_thread_id != thread_id {
@@ -977,16 +977,33 @@ impl App {
                 {
                     return Ok(true);
                 }
-                let model = self
-                    .chat_widget
-                    .config_ref()
-                    .experimental_realtime_ws_model
-                    .clone();
-                let voice = if let Some(voice) = allocated_voice {
-                    Some(*voice)
+                let (model, voice, frontend) = if let Some(selection) = selection {
+                    let voice = if selection.frontend.backend
+                        == codex_protocol::protocol::RealtimeBackend::Openai
+                        && selection.voice.is_none()
+                        && !selection.omit_openai_voice
+                    {
+                        Some(self.realtime_voices(app_server).await?.default_v1)
+                    } else {
+                        selection.voice
+                    };
+                    (
+                        selection.model.clone(),
+                        voice,
+                        Some(selection.frontend.clone()),
+                    )
                 } else {
+                    let model = self
+                        .chat_widget
+                        .config_ref()
+                        .experimental_realtime_ws_model
+                        .clone();
                     let voices = self.realtime_voices(app_server).await?;
-                    self.effective_realtime_voice(app_server, &voices).await?
+                    (
+                        model,
+                        self.effective_realtime_voice(app_server, &voices).await?,
+                        None,
+                    )
                 };
                 app_server
                     .thread_realtime_start(
@@ -994,6 +1011,7 @@ impl App {
                         String::from(offer_sdp.clone()),
                         model,
                         voice,
+                        frontend,
                     )
                     .await?;
                 Ok(true)

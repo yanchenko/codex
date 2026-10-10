@@ -13228,6 +13228,9 @@ voice = "marin"
     assert_eq!(
         config.realtime,
         RealtimeConfig {
+            backend: None,
+            openai: Default::default(),
+            gemini: None,
             voice: Some(RealtimeVoice::Marin),
             ..RealtimeConfig::default()
         }
@@ -13253,6 +13256,10 @@ managed_voice = true
         cfg.realtime,
         Some(RealtimeToml {
             managed_voice: Some(true),
+            backend: None,
+            openai: Default::default(),
+            gemini: None,
+            local_adapter: None,
             version: Some(RealtimeWsVersion::V2),
             session_type: Some(RealtimeWsMode::Transcription),
             transport: Some(RealtimeTransport::WebRtc),
@@ -13272,12 +13279,39 @@ managed_voice = true
         config.realtime,
         RealtimeConfig {
             managed_voice: true,
+            backend: None,
+            openai: Default::default(),
+            gemini: None,
+            local_adapter: None,
             version: RealtimeWsVersion::V2,
             session_type: RealtimeWsMode::Transcription,
             transport: RealtimeTransport::WebRtc,
             voice: Some(RealtimeVoice::Cedar),
         }
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn realtime_local_adapter_loads_without_changing_executor_provider() -> std::io::Result<()> {
+    let cfg: ConfigToml = toml::from_str(
+        r#"
+[realtime.local_adapter]
+base_url = "http://127.0.0.1:1234"
+bearer_token_env = "LOCAL_VOICE_NONCE"
+"#,
+    )
+    .unwrap();
+    let expected = cfg.realtime.as_ref().unwrap().local_adapter.clone();
+    let codex_home = TempDir::new()?;
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await?;
+    assert_eq!(config.realtime.local_adapter, expected);
+    assert_eq!(config.model_provider_id, "openai");
     Ok(())
 }
 

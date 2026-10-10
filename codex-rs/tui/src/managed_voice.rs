@@ -2,6 +2,7 @@
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use codex_protocol::ThreadId;
+use codex_protocol::protocol::RealtimeBackend;
 use codex_protocol::protocol::RealtimeVoice;
 use codex_protocol::protocol::RealtimeVoicesList;
 use codex_realtime_webrtc::NativeLeaseProof;
@@ -31,7 +32,6 @@ pub(crate) struct StartIdentity {
 
 pub(crate) struct Admission {
     pub lease: Lease,
-    pub voice: RealtimeVoice,
     pub proof: NativeLeaseProof,
     pub startup: NativeStartupGuard,
 }
@@ -39,7 +39,7 @@ impl std::fmt::Debug for Admission {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Admission")
             .field("call", &self.lease.call)
-            .field("voice", &self.voice)
+            .field("voice", &self.lease.voice)
             .finish_non_exhaustive()
     }
 }
@@ -64,6 +64,7 @@ enum Command {
         generation: u64,
         epoch: u64,
         abort: AbortHandle,
+        backend: RealtimeBackend,
     },
     Active {
         generation: u64,
@@ -81,13 +82,19 @@ pub(crate) struct ManagedVoice {
     epoch: Arc<Mutex<Option<u64>>>,
 }
 impl ManagedVoice {
-    pub fn new(owner: ThreadId, events: AppEventSender) -> Self {
-        Self::in_directory(owner, events, codex_voice_control::runtime_directory())
+    pub fn new(owner: ThreadId, events: AppEventSender, backend: RealtimeBackend) -> Self {
+        Self::in_directory(
+            owner,
+            events,
+            codex_voice_control::runtime_directory(),
+            backend,
+        )
     }
     fn in_directory(
         owner: ThreadId,
         events: AppEventSender,
         directory: std::path::PathBuf,
+        backend: RealtimeBackend,
     ) -> Self {
         let instance = Uuid::new_v4();
         let (sender, receiver) = mpsc::channel(8);
@@ -99,6 +106,7 @@ impl ManagedVoice {
             epoch.clone(),
             receiver,
             directory,
+            backend,
         ));
         Self {
             instance,
@@ -118,6 +126,7 @@ impl ManagedVoice {
         generation: u64,
         expected: Option<u64>,
         abort: AbortHandle,
+        backend: RealtimeBackend,
     ) -> Result<(), String> {
         let epoch = self
             .epoch()
@@ -130,6 +139,7 @@ impl ManagedVoice {
                 generation,
                 epoch,
                 abort,
+                backend,
             })
             .map_err(|_| "Voice coordinator is busy or stopped.".to_owned())
     }
@@ -191,6 +201,7 @@ async fn run(
     epoch: Arc<Mutex<Option<u64>>>,
     mut commands: mpsc::Receiver<Command>,
     directory: std::path::PathBuf,
+    initial_backend: RealtimeBackend,
 ) {
     let mut client: Option<Client> = None;
     let mut pending: Option<Pending> = None;
@@ -205,11 +216,19 @@ async fn run(
                 let executable = std::env::current_exe()?;
                 let mut client =
                     codex_voice_control::connect_or_start(&directory, &executable).await?;
+                let snapshot = client.snapshot().await?;
+                // Reconnect using the durable provider of any existing call;
+                // never relabel an occupied lease after changing UI preferences.
+                let provider = snapshot
+                    .instances
+                    .get(&instance)
+                    .map(|instance| instance.provider.clone())
+                    .unwrap_or_else(|| initial_backend.pool_key().to_owned());
                 let state = client
                     .request(Operation::Register {
                         instance,
                         owner: owner.to_string(),
-                        provider: "openai".into(),
+                        provider,
                     })
                     .await?;
                 anyhow::Ok((client, state))
@@ -263,7 +282,7 @@ async fn run(
         let result: anyhow::Result<()> = async {
             tokio::select! {
                 command = commands.recv(), if !closing => match command {
-                    Some(Command::Reserve { generation, epoch: admission_epoch, abort }) => {
+                    Some(Command::Reserve { generation, epoch: admission_epoch, abort, backend }) => {
                         if abort.is_aborted() { return Ok(()); }
                         if pending.is_some() {
                             abort.abort();
@@ -285,12 +304,13 @@ async fn run(
                         };
                         let (retirement, startup) = NativeRetirement::startup();
                         pending = Some(Pending { call: call.clone(), epoch: admission_epoch, abort: abort.clone(), retirement, guard: Some(guard), unknown_reported: false });
-                        let admitted = connection.request(Operation::Reserve { call: call.clone(), epoch: admission_epoch }).await;
+                        let admitted = connection.request(Operation::ReserveForProvider { call: call.clone(), epoch: admission_epoch, provider: backend.pool_key().to_owned() }).await;
                         let admission = admitted.and_then(|state| {
                             anyhow::ensure!(lease_valid(&state, &call, admission_epoch) && !abort.is_aborted(), "voice start cancelled or stale");
                             let lease = state.leases.get(&instance).cloned().ok_or_else(|| anyhow::anyhow!("missing voice reservation"))?;
-                            let voice = managed_openai_voice(&lease.voice)?;
-                            Ok(Admission { lease, voice, proof, startup })
+                            anyhow::ensure!(lease.provider == backend.pool_key(), "reservation provider mismatch");
+                            validate_managed_voice(backend, &lease.voice)?;
+                            Ok(Admission { lease, proof, startup })
                         }).map_err(|error| error.to_string());
                         if admission.is_err() { abort.abort(); }
                         emit(&events, owner, instance, Event::Admission { generation, result: admission });
@@ -392,6 +412,19 @@ fn managed_openai_voice(name: &str) -> anyhow::Result<RealtimeVoice> {
     Ok(voice)
 }
 
+pub(crate) fn validate_managed_voice(backend: RealtimeBackend, name: &str) -> anyhow::Result<()> {
+    match backend {
+        RealtimeBackend::Openai => {
+            managed_openai_voice(name)?;
+        }
+        RealtimeBackend::Gemini => anyhow::ensure!(
+            codex_protocol::protocol::GEMINI_VOICES.contains(&name),
+            "Gemini voice is not in the managed voice catalog; reconfigure the gemini pool"
+        ),
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used, clippy::unwrap_used)]
@@ -437,7 +470,12 @@ mod tests {
             .unwrap();
         let (send, receive) = mpsc::unbounded_channel();
         let owner = ThreadId::new();
-        let managed = ManagedVoice::in_directory(owner, AppEventSender::new(send), directory);
+        let managed = ManagedVoice::in_directory(
+            owner,
+            AppEventSender::new(send),
+            directory,
+            RealtimeBackend::Openai,
+        );
         tokio::time::timeout(Duration::from_secs(5), async {
             while managed.epoch().is_none() {
                 tokio::time::sleep(Duration::from_millis(10)).await;
@@ -473,6 +511,92 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn gemini_allocations_share_global_stop_and_switch_only_after_retirement() {
+        let (temp, mut admin, first, mut first_events, server) = setup().await;
+        admin
+            .request(Operation::Configure {
+                provider: "gemini".into(),
+                voices: vec!["Kore".into(), "Aoede".into()],
+            })
+            .await
+            .unwrap();
+        admin
+            .request(Operation::Bind {
+                instance: first.instance,
+            })
+            .await
+            .unwrap();
+        admin
+            .request(Operation::Start {
+                epoch: first.epoch().unwrap(),
+            })
+            .await
+            .unwrap();
+        let (send, mut second_events) = mpsc::unbounded_channel();
+        let second = ManagedVoice::in_directory(
+            ThreadId::new(),
+            AppEventSender::new(send),
+            temp.path().join("control"),
+            RealtimeBackend::Gemini,
+        );
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while second.epoch().is_none() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let (abort_a, _) = AbortHandle::new_pair();
+        let (abort_b, _) = AbortHandle::new_pair();
+        first
+            .reserve(1, None, abort_a.clone(), RealtimeBackend::Gemini)
+            .unwrap();
+        second
+            .reserve(1, None, abort_b.clone(), RealtimeBackend::Gemini)
+            .unwrap();
+        let one = admission(&mut first_events, 1).await.unwrap();
+        let two = admission(&mut second_events, 1).await.unwrap();
+        assert_ne!(one.lease.voice, two.lease.voice);
+        assert_eq!(one.lease.provider, "gemini");
+        assert_eq!(two.lease.provider, "gemini");
+        assert_eq!(admin.snapshot().await.unwrap().bound, Some(first.instance));
+        let (switch, _) = AbortHandle::new_pair();
+        first
+            .reserve(2, None, switch, RealtimeBackend::Openai)
+            .unwrap();
+        assert!(admission(&mut first_events, 2).await.is_err());
+        let stopped = admin.request(Operation::GlobalOff).await.unwrap();
+        assert!(stopped.stopping);
+        assert_eq!(stopped.leases.len(), 2);
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !abort_a.is_aborted() || !abort_b.is_aborted() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        drop((one, two));
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !admin.snapshot().await.unwrap().leases.is_empty() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let (next, _) = AbortHandle::new_pair();
+        first
+            .reserve(3, None, next, RealtimeBackend::Openai)
+            .unwrap();
+        let switched = admission(&mut first_events, 3).await.unwrap();
+        assert_eq!(switched.lease.provider, "openai");
+        assert_eq!(switched.lease.voice, "cove");
+        assert_eq!(admin.snapshot().await.unwrap().bound, Some(first.instance));
+        drop(switched);
+        drop((first, second));
+        server.abort();
+    }
+
+    #[tokio::test]
     async fn persisted_v2_pool_is_rejected_before_native_startup_and_retires() {
         let (_temp, mut admin, managed, mut events, server) = setup().await;
         admin
@@ -483,7 +607,9 @@ mod tests {
             .await
             .unwrap();
         let (abort, _registration) = AbortHandle::new_pair();
-        managed.reserve(1, None, abort.clone()).unwrap();
+        managed
+            .reserve(1, None, abort.clone(), RealtimeBackend::Openai)
+            .unwrap();
         assert!(
             admission(&mut events, 1)
                 .await
@@ -505,9 +631,11 @@ mod tests {
     async fn global_off_aborts_late_start_but_waits_for_startup_retirement() {
         let (_temp, mut admin, managed, mut events, server) = setup().await;
         let (abort, _registration) = AbortHandle::new_pair();
-        managed.reserve(1, None, abort.clone()).unwrap();
+        managed
+            .reserve(1, None, abort.clone(), RealtimeBackend::Openai)
+            .unwrap();
         let pending_start = admission(&mut events, 1).await.unwrap();
-        assert_eq!(pending_start.voice, RealtimeVoice::Cove);
+        assert_eq!(pending_start.lease.voice, "cove");
         let before_off = pending_start.lease.epoch;
         let stopped = admin.request(Operation::GlobalOff).await.unwrap();
         assert!(stopped.stopping);
@@ -521,7 +649,11 @@ mod tests {
         // The delayed offer worker still owns its guard, even though UI cancellation is done.
         assert_eq!(admin.snapshot().await.unwrap().leases.len(), 1);
         let (later, _) = AbortHandle::new_pair();
-        assert!(managed.reserve(2, Some(before_off), later).is_err());
+        assert!(
+            managed
+                .reserve(2, Some(before_off), later, RealtimeBackend::Openai)
+                .is_err()
+        );
         drop(pending_start);
         tokio::time::timeout(Duration::from_secs(5), async {
             while !admin.snapshot().await.unwrap().leases.is_empty() {
@@ -545,11 +677,15 @@ mod tests {
     async fn reset_cannot_reuse_occupied_voice_or_acknowledge_old_generation() {
         let (_temp, mut admin, managed, mut events, server) = setup().await;
         let (abort, _) = AbortHandle::new_pair();
-        managed.reserve(10, None, abort.clone()).unwrap();
+        managed
+            .reserve(10, None, abort.clone(), RealtimeBackend::Openai)
+            .unwrap();
         let pending_start = admission(&mut events, 10).await.unwrap();
         managed.stop(10);
         let (second, _) = AbortHandle::new_pair();
-        managed.reserve(11, None, second).unwrap();
+        managed
+            .reserve(11, None, second, RealtimeBackend::Openai)
+            .unwrap();
         assert!(admission(&mut events, 11).await.is_err());
         let state = admin.snapshot().await.unwrap();
         assert_eq!(state.leases[&managed.instance].call.generation, 10);
@@ -578,7 +714,9 @@ mod tests {
         let (_temp, mut admin, managed, mut events, server) = setup().await;
         let instance = managed.instance;
         let (abort, _) = AbortHandle::new_pair();
-        managed.reserve(20, None, abort.clone()).unwrap();
+        managed
+            .reserve(20, None, abort.clone(), RealtimeBackend::Openai)
+            .unwrap();
         let pending_start = admission(&mut events, 20).await.unwrap();
         drop(managed);
         tokio::time::timeout(Duration::from_secs(5), async {
