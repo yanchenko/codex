@@ -514,14 +514,27 @@ impl Monitor {
     }
 
     fn confirm_owned_devices(&mut self, services: &[i64]) -> Result<()> {
-        // Drain pre-ownership input while admission is closed. A new keyboard
-        // cannot act as a voice switch until its remap has been read back.
-        self.callback.owned_devices.clear();
+        // Existing, still-confirmed keyboards remain responsive during the
+        // drain. New/changed devices cannot request voice before confirmation.
+        let confirmed = self.confirmed_devices(services)?;
+        super::retain_confirmed(&mut self.callback.owned_devices, &confirmed);
         self.poll();
         ensure!(
             unsafe { CGEventSourceFlagsState(0) } & 0x10000 == 0,
             "logical Caps changed before ownership was confirmed; disable logical Caps before retrying"
         );
+        // Re-enumerate after callbacks: a removal during the drain must not
+        // reintroduce a stale device pointer into the admitted set.
+        self.callback.owned_devices = self.confirmed_devices(services)?;
+        ensure!(
+            !self.callback.owned_devices.is_empty(),
+            "no raw keyboard could be matched to a confirmed Caps mapping; refusing unowned input"
+        );
+        Ok(())
+    }
+
+    fn confirmed_devices(&self, services: &[i64]) -> Result<BTreeSet<usize>> {
+        let mut confirmed = BTreeSet::new();
         let devices = Owned::new(unsafe { IOHIDManagerCopyDevices(self.manager.0) })?;
         let count = unsafe { CFSetGetCount(devices.0) };
         ensure!((0..=256).contains(&count), "unexpected HID device count");
@@ -537,14 +550,10 @@ impl Monitor {
                 .iter()
                 .any(|service| service_descends_from(*service as u64, id))
             {
-                self.callback.owned_devices.insert(device as usize);
+                confirmed.insert(device as usize);
             }
         }
-        ensure!(
-            !self.callback.owned_devices.is_empty(),
-            "no raw keyboard could be matched to a confirmed Caps mapping; refusing unowned input"
-        );
-        Ok(())
+        Ok(confirmed)
     }
 
     fn set_led(&self, on: bool) -> Result<usize> {
@@ -554,6 +563,7 @@ impl Monitor {
         let mut values = vec![ptr::null(); count as usize];
         unsafe { CFSetGetValues(devices.0, values.as_mut_ptr()) };
         let mut written = 0;
+        let mut indicated = BTreeSet::new();
         for device in values {
             if !self.callback.owned_devices.contains(&(device as usize))
                 || unsafe { IOHIDDeviceConformsTo(device, 1, 6) } == 0
@@ -583,12 +593,10 @@ impl Monitor {
                     "Caps LED output report failed ({result:#x}); physical indicator is unavailable"
                 );
                 written += 1;
+                indicated.insert(device as usize);
             }
         }
-        ensure!(
-            written > 0,
-            "no writable Caps LED was discovered; physical indicator is unavailable"
-        );
+        super::require_indicators(&self.callback.owned_devices, &indicated)?;
         Ok(written)
     }
 }
@@ -747,6 +755,7 @@ async fn run(directory: &Path, client: &mut Client) -> Result<()> {
                 "no keyboard services available for Caps ownership"
             );
             let mut desired = initial_indicator;
+            let mut indicator_dirty = true;
             let mut last_reconcile = std::time::Instant::now() - Duration::from_secs(2);
             while !worker_stop.load(Ordering::Acquire) {
                 ensure!(
@@ -758,14 +767,17 @@ async fn run(directory: &Path, client: &mut Client) -> Result<()> {
                     "Input Monitoring was revoked; releasing Caps ownership"
                 );
                 while let Ok(next) = led_rx.try_recv() {
-                    desired = next;
-                    last_reconcile = std::time::Instant::now() - Duration::from_secs(2);
+                    indicator_dirty |= super::update_indicator(&mut desired, next);
                 }
                 if last_reconcile.elapsed() >= Duration::from_secs(1) {
                     remaps.update(true)?; // Re-enumerate after attach/detach or wake.
                     monitor.confirm_owned_devices(&remaps.recovery.services)?;
-                    monitor.set_led(desired)?;
+                    indicator_dirty = true;
                     last_reconcile = std::time::Instant::now();
+                }
+                if indicator_dirty {
+                    monitor.set_led(desired)?;
+                    indicator_dirty = false;
                 }
                 monitor.poll();
             }

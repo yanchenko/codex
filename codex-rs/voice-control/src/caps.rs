@@ -51,9 +51,67 @@ impl Edges {
     }
 }
 
+/// Keep already confirmed keyboards live while draining input from newcomers.
+#[cfg(any(target_os = "macos", test))]
+fn retain_confirmed(
+    admitted: &mut std::collections::BTreeSet<usize>,
+    confirmed: &std::collections::BTreeSet<usize>,
+) {
+    admitted.retain(|device| confirmed.contains(device));
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn require_indicators(
+    admitted: &std::collections::BTreeSet<usize>,
+    written: &std::collections::BTreeSet<usize>,
+) -> Result<()> {
+    anyhow::ensure!(
+        !admitted.is_empty() && admitted.is_subset(written),
+        "every admitted keyboard requires a writable Caps LED; physical indicator is unavailable"
+    );
+    Ok(())
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn update_indicator(desired: &mut bool, next: bool) -> bool {
+    let changed = *desired != next;
+    *desired = next;
+    changed
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn reconciliation_keeps_confirmed_edges_live_and_gates_changed_devices() {
+        let mut admitted = [1, 2].into_iter().collect();
+        let confirmed = [1, 3].into_iter().collect();
+        retain_confirmed(&mut admitted, &confirmed);
+        let mut edges = Edges::default();
+        assert!(edges.update_owned(1, true, admitted.contains(&1)));
+        assert!(!edges.update_owned(2, true, admitted.contains(&2)));
+        assert!(!edges.update_owned(3, true, admitted.contains(&3)));
+        admitted = confirmed;
+        assert!(!edges.update_owned(3, true, admitted.contains(&3)));
+        assert!(!edges.update_owned(3, false, admitted.contains(&3)));
+        assert!(edges.update_owned(3, true, admitted.contains(&3)));
+    }
+
+    #[test]
+    fn each_admitted_keyboard_requires_its_own_indicator() {
+        let admitted = [1, 2].into_iter().collect();
+        assert!(require_indicators(&admitted, &[1].into_iter().collect()).is_err());
+        assert!(require_indicators(&admitted, &[1, 2].into_iter().collect()).is_ok());
+        assert!(require_indicators(&Default::default(), &Default::default()).is_err());
+    }
+
+    #[test]
+    fn unchanged_indicator_snapshot_does_not_request_a_refresh() {
+        let mut desired = false;
+        assert!(!update_indicator(&mut desired, false));
+        assert!(update_indicator(&mut desired, true));
+        assert!(!update_indicator(&mut desired, true));
+    }
     #[test]
     fn unowned_or_hotplugged_press_is_not_replayed_after_acquisition() {
         let mut edges = Edges::default();
