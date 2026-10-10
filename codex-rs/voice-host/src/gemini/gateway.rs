@@ -487,7 +487,16 @@ pub(super) async fn serve(
     });
     let stop_owner = app.clone();
     let watchdog = tokio::spawn(async move {
-        tokio::select! {_=parent.changed()=>{},_=tokio::time::sleep(Duration::from_secs(45))=>{if stop_owner.used.load(Ordering::SeqCst){let _=parent.changed().await;}}}
+        if !*parent.borrow() {
+            tokio::select! {
+                _ = parent.changed() => {},
+                _ = tokio::time::sleep(Duration::from_secs(45)) => {
+                    if stop_owner.used.load(Ordering::SeqCst) && !*parent.borrow() {
+                        let _ = parent.changed().await;
+                    }
+                }
+            }
+        }
         let _ = stop_owner.stop.send(true);
     });
     let server = axum::serve(listener, router(app.clone())).with_graceful_shutdown(async move {
@@ -524,6 +533,20 @@ mod tests {
             nonce: "a".repeat(64),
             google_api_key: "fixture-key".into(),
         }
+    }
+    #[tokio::test]
+    async fn parent_already_closed_before_serve_closes_listener_immediately() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (_parent, receiver) = watch::channel(true);
+        timeout(
+            Duration::from_millis(500),
+            serve(listener, init(), receiver),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(TcpStream::connect(addr).await.is_err());
     }
     #[test]
     fn credentials_are_bounded_and_origin_is_rejected() {
