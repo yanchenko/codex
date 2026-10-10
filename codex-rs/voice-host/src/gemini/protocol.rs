@@ -38,6 +38,12 @@ fn identifier(value: &Value, max: usize) -> Result<&str> {
     Ok(value)
 }
 pub(super) fn setup(session: &Value) -> Result<Value> {
+    if session
+        .get("initial_items")
+        .is_some_and(|items| !items.as_array().is_some_and(Vec::is_empty))
+    {
+        return Err("Gemini startup history is unsupported; append context after starting");
+    }
     let gemini = &session["gemini"];
     let model = identifier(&gemini["model"], 128)?;
     let voice = identifier(&gemini["voice"], 64)?;
@@ -286,6 +292,22 @@ impl Translation {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn startup_history_is_rejected_instead_of_silently_discarded() {
+        let mut session = json!({"gemini":{"model":"gemini-live","voice":"Kore"}});
+        assert!(setup(&session).is_ok());
+        session["initial_items"] = json!([]);
+        assert!(setup(&session).is_ok());
+        for items in [
+            json!([{"role":"user","content":[]}]),
+            json!({}),
+            Value::Null,
+        ] {
+            session["initial_items"] = items;
+            assert!(setup(&session).is_err());
+        }
+    }
     fn task(id: &str) -> Value {
         json!({"toolCall":{"functionCalls":[{"id":id,"name":"delegate_to_codex","args":{"task":"inspect repository"}}]}})
     }

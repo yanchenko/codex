@@ -140,6 +140,9 @@ for correlating arbitrarily late input transcripts; ordering follows explicit
 finished/interrupted/turn-complete/delegation boundaries without pretending that
 assistant audio starts identify a new user utterance. Disconnect requires a fresh
 voice start and never replays or cancels an admitted coding task.
+Nonempty startup `initial_items` are rejected explicitly; the TUI supplies its
+context through the sideband after starting. Startup history is not silently
+discarded or promoted into system instructions.
 
 `voice-host` unit tests cover real native RTC, protocol translation and mock
 Google HTTP/WS sessions. `installed_client` checks the packaged subprocess with
