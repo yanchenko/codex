@@ -305,6 +305,30 @@ pub fn runtime_directory() -> std::path::PathBuf {
         })
 }
 
+// The coordinator never needs provider credentials or arbitrary parent
+// configuration. Preserve only process/OS discovery variables across launch.
+fn coordinator_environment(
+    environment: impl Iterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
+) -> Vec<(std::ffi::OsString, std::ffi::OsString)> {
+    environment
+        .filter(|(name, _)| {
+            name.to_str().is_some_and(|name| {
+                matches!(
+                    name.to_ascii_uppercase().as_str(),
+                    "PATH"
+                        | "HOME"
+                        | "TMPDIR"
+                        | "TEMP"
+                        | "TMP"
+                        | "SYSTEMROOT"
+                        | "WINDIR"
+                        | "USERPROFILE"
+                )
+            })
+        })
+        .collect()
+}
+
 pub async fn connect_or_start(directory: &Path, executable: &Path) -> Result<Client> {
     if let Ok(mut client) = Client::connect(directory).await {
         client.snapshot().await?;
@@ -315,6 +339,8 @@ pub async fn connect_or_start(directory: &Path, executable: &Path) -> Result<Cli
         .arg("--directory")
         .arg(directory)
         .arg("serve")
+        .env_clear()
+        .envs(coordinator_environment(std::env::vars_os()))
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -380,6 +406,31 @@ mod tests {
             .await
             .unwrap();
         (client, call)
+    }
+
+    #[test]
+    fn coordinator_launch_drops_provider_credentials_and_unrelated_configuration() {
+        let environment = coordinator_environment(
+            [
+                ("Path".into(), "os-path".into()),
+                ("HOME".into(), "home".into()),
+                ("SystemRoot".into(), "windows".into()),
+                ("OPENAI_API_KEY".into(), "private".into()),
+                ("GEMINI_API_KEY".into(), "private".into()),
+                ("GOOGLE_API_KEY".into(), "private".into()),
+                ("CODEX_HOME".into(), "provider-config".into()),
+                ("UNRELATED_SECRET".into(), "private".into()),
+            ]
+            .into_iter(),
+        );
+        assert_eq!(
+            environment,
+            vec![
+                ("Path".into(), "os-path".into()),
+                ("HOME".into(), "home".into()),
+                ("SystemRoot".into(), "windows".into()),
+            ]
+        );
     }
 
     #[tokio::test]
