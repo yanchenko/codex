@@ -149,3 +149,8 @@ The ignored `live_google_rust_gateway_text_and_native_audio` test accepts
 an optional `CODEX_GEMINI_TEST_MODEL`; it sends synthetic silence and observes
 transcription plus native RTP output without opening any audio device. Live tests
 incur provider usage and are never part of an ordinary automated run.
+The ignored `live_google_packaged_rust_child_text_and_native_audio` test adds
+`CODEX_GEMINI_TEST_HELPER`, an absolute path to a matching packaged helper with its
+startup libraries. It verifies private initialization, matching readiness,
+real Google text/audio through the child, explicit stop, process exit and listener
+closure. Neither live test exercises the TUI or physical audio devices.
