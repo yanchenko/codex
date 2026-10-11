@@ -17,6 +17,8 @@ Enable the existing realtime feature in your normal configuration if it is not a
 
 The coordinator is shared per OS user, independently of `CODEX_HOME`. `CODEX_VOICE_CONTROL_DIR` overrides its private runtime directory for isolated testing; all participating processes must use the same value. Do not delete its journal or lease files to resolve an occupied/unknown voice: that removes the evidence required for safe recovery.
 
+When upgrading to a build with automatic targeting, an already running coordinator keeps its old behavior. First stop managed calls with `voice-control off`, wait for an empty lease set and `stopping: false`, close participating TUIs, and release the Caps monitor. Restart the coordinator and monitor using the new binary, then reopen managed sessions. Merely launching a new CLI against an older coordinator does not install the new targeting behavior. Preserve the runtime journal during this restart.
+
 ## Global lifecycle controls
 
 ```sh
