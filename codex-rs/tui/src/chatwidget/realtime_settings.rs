@@ -20,6 +20,21 @@ fn back_item(parent: fn() -> AppEvent) -> SelectionItem {
     }
 }
 
+fn gemini_voice_gender(voice: &str) -> &'static str {
+    // Google publishes gender for these shared Gemini voice names:
+    // https://docs.cloud.google.com/text-to-speech/docs/gemini-tts#voice_options
+    match voice {
+        "Achernar" | "Aoede" | "Autonoe" | "Callirrhoe" | "Despina" | "Erinome" | "Gacrux"
+        | "Kore" | "Laomedeia" | "Leda" | "Pulcherrima" | "Sulafat" | "Vindemiatrix" | "Zephyr" => {
+            "Female"
+        }
+        "Achird" | "Algenib" | "Algieba" | "Alnilam" | "Charon" | "Enceladus" | "Fenrir"
+        | "Iapetus" | "Orus" | "Puck" | "Rasalgethi" | "Sadachbia" | "Sadaltager" | "Schedar"
+        | "Umbriel" | "Zubenelgenubi" => "Male",
+        _ => "Gender unspecified",
+    }
+}
+
 impl ChatWidget {
     pub(super) fn realtime_audio_settings(
         &mut self,
@@ -239,6 +254,7 @@ impl ChatWidget {
             .into_iter()
             .map(|voice| SelectionItem {
                 name: voice.clone(),
+                description: Some(gemini_voice_gender(&voice).into()),
                 is_current: voice == current,
                 actions: vec![Box::new(move |tx| {
                     tx.send(AppEvent::PersistRealtimeFrontend {

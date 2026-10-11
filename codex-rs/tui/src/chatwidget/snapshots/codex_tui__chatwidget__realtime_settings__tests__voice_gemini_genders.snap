@@ -1,0 +1,18 @@
+---
+source: tui/src/chatwidget/realtime_settings_tests.rs
+expression: "render_bottom_popup(&chat, 80)"
+---
+  Gemini Live voice
+  Applies to your next voice conversation.
+
+
+› 1. Achernar         Female
+  2. Achird           Male
+  3. Algenib          Male
+  4. Algieba          Male
+  5. Alnilam          Male
+  6. Aoede            Female
+  7. Autonoe          Female
+  8. Callirrhoe       Female
+↓
+  enter select · esc back

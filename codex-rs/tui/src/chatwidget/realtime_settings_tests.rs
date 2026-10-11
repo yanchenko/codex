@@ -365,6 +365,7 @@ async fn frontend_menus_select_provider_model_and_voice_without_starting_audio()
     chat.open_gemini_voices();
     chat.bottom_pane
         .handle_key_event(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
+    insta::assert_snapshot!("voice_gemini_genders", render_bottom_popup(&chat, 80));
     chat.bottom_pane
         .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     assert!(std::iter::from_fn(|| events.try_recv().ok()).any(|event| matches!(event, AppEvent::PersistRealtimeFrontend { setting: FrontendSetting::GeminiVoice(voice) } if voice == "Achernar")));
