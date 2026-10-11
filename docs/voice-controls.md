@@ -17,6 +17,8 @@ Enable the existing realtime feature in your normal configuration if it is not a
 
 The coordinator is shared per OS user, independently of `CODEX_HOME`. `CODEX_VOICE_CONTROL_DIR` overrides its private runtime directory for isolated testing; all participating processes must use the same value. Do not delete its journal or lease files to resolve an occupied/unknown voice: that removes the evidence required for safe recovery.
 
+When upgrading to a build with automatic targeting, an already running coordinator keeps its old behavior. First stop managed calls with `voice-control off`, wait for an empty lease set and `stopping: false`, close participating TUIs, and release the Caps monitor. Restart the coordinator and monitor using the new binary, then reopen managed sessions. Merely launching a new CLI against an older coordinator does not install the new targeting behavior. Preserve the runtime journal during this restart.
+
 ## Global lifecycle controls
 
 ```sh
@@ -26,7 +28,7 @@ codex voice-control off
 codex voice-control status
 ```
 
-ON uses the most recently confirmed voice session or the session explicitly selected with `bind`. A call becomes the remembered target only after its start is confirmed; a failed start or repeated confirmation does not change the selection. `bind` selects the next ON target until another call genuinely becomes active; it is not a permanent pin. OFF and native retirement retain this selection for the next conversation. Switching only the provider in the same enrolled thread retains it as well. This selects a voice owner, not the frontmost terminal.
+ON uses the most recently confirmed voice session or the session explicitly selected with `bind`. Starting voice in another session replaces the remembered target only after its start is confirmed; a failed start or repeated confirmation does not replace that selection. `bind` selects the next ON target until another call genuinely becomes active; it is not a permanent pin. OFF and native retirement retain this selection for the next conversation. Switching only the provider in the same enrolled thread retains it as well. This selects a voice owner, not the frontmost terminal.
 
 When the selected session has closed, or no session has been selected, ON automatically selects the **only connected managed session**. A fresh Codex process can therefore use a new UUID without a manual `bind`. If several sessions are connected with no live selection, ON refuses with a diagnostic: start voice in the intended session using `/voice`, or inspect `status` and explicitly `bind` its UUID. Enrollment and reconnect order never pick a target. A connected selected session remains selected when other terminals open. `status` reports the remembered target in `bound`; the sole-session fallback is resolved and saved when ON is requested. Navigating to a different thread clears the old selection and uses the same sole-session/explicit-selection rules.
 
