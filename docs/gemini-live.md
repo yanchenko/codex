@@ -58,6 +58,7 @@ The local connection retains Codex network policy. The gateway's Google connecti
 - Context is atomic for the local adapter. Serialized frames are bounded to 256 KiB and text to 128 KiB; overflow ends voice with an error rather than truncating a task result.
 - Quiet commentary is buffered until the next spoken result because sending Google client content can interrupt generation. Buffer plus result shares the text bound.
 - Input and output transcripts can arrive out of order. The gateway uses explicit interruption, completion, delegation, and finished boundaries; it cannot reconstruct perfect utterance IDs absent provider identifiers.
+- Gemini output may arrive faster than playback. The adapter retains up to two minutes of queued PCM audio (5.76 MB); exceeding this bound ends the call with an explicit error rather than silently dropping speech. Adapter failures report a static reason to Codex without exposing provider payloads or credentials.
 - An interruption cancels unsent output. Already buffered native playout can leave a short residual tail; actual acoustic performance needs a microphone/speaker test.
 - In this integration build, [managed voice/Caps](voice-controls.md) allocates Gemini voices from a separate configured Gemini pool. Individual voice preferences apply only when managed allocation is disabled; backend and model choices remain available.
 

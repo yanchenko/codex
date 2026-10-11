@@ -17,7 +17,7 @@ fn live_configuration() -> (String, String) {
     (key, model)
 }
 
-async fn exercise_live(addr: std::net::SocketAddr, nonce: &str, model: &str) {
+async fn exercise_live(addr: std::net::SocketAddr, nonce: &str, model: &str, long_response: bool) {
     let mut native = crate::transport::Transport::new().await.unwrap();
     let offer = native.offer().await.unwrap();
     let response = request(addr, nonce, offer, model).await;
@@ -46,18 +46,27 @@ async fn exercise_live(addr: std::net::SocketAddr, nonce: &str, model: &str) {
     let initial = socket.next().await.unwrap().unwrap();
     let event: Value = serde_json::from_slice(&initial.into_data()).unwrap();
     assert_eq!(event["type"], "session.started");
-    socket.send(Message::Text(json!({"type":"session.context.append","channel":"speakable","content":[{"type":"input_text","text":"For a short connection test, say exactly: Rust voice connection is ready."}]}).to_string().into())).await.unwrap();
+    let prompt = if long_response {
+        "For a voice stability test, speak for at least thirty seconds explaining how to plant and care for a small herb garden. Use complete sentences and do not call tools."
+    } else {
+        "For a short connection test, say exactly: Rust voice connection is ready."
+    };
+    socket.send(Message::Text(json!({"type":"session.context.append","channel":"speakable","content":[{"type":"input_text","text":prompt}]}).to_string().into())).await.unwrap();
     let mut transcript = false;
     let mut nonzero = false;
+    let mut completed = false;
+    let mut audible_samples = 0usize;
     let mut decoder = Media::new().unwrap();
     let mut tick = tokio::time::interval(Duration::from_millis(20));
     tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
-    while !transcript || !nonzero {
+    while !transcript || !nonzero || !completed || (long_response && audible_samples < 16000 * 15) {
         tokio::select! {
             message = socket.next() => {
                 let message = message.expect("sideband open").expect("sideband message");
                 if message.is_text() {
                     let value: Value = serde_json::from_slice(&message.into_data()).unwrap();
+                    assert_ne!(value["type"], "error", "gateway error: {}", value["error"]["message"]);
+                    completed |= value["type"] == "turn.done" && value["turn"]["role"] == "assistant";
                     if value["type"] == "output_transcript.added" {
                         transcript = value["item"]["text"].as_str().is_some_and(|v| !v.is_empty());
                     }
@@ -67,7 +76,9 @@ async fn exercise_live(addr: std::net::SocketAddr, nonce: &str, model: &str) {
                 native.audio.send(crate::audio_track::EncodedAudio { data: vec![0xf8, 0xff, 0xfe], at: Instant::now() }).await.unwrap();
                 while let Some(packet) = native.incoming.take().unwrap() {
                     let pcm = decoder.capture(packet.as_ref()).unwrap();
-                    nonzero |= pcm.chunks_exact(2).any(|v| i16::from_le_bytes([v[0], v[1]]).unsigned_abs() > 100);
+                    let audible = pcm.chunks_exact(2).any(|v| i16::from_le_bytes([v[0], v[1]]).unsigned_abs() > 100);
+                    nonzero |= audible;
+                    if audible { audible_samples += pcm.len() / 2; }
                 }
             }
         }
@@ -114,7 +125,7 @@ async fn live_google_rust_gateway_text_and_native_audio() {
                 .await
                 .unwrap();
         });
-        exercise_live(addr, &app.init.nonce, &model).await;
+        exercise_live(addr, &app.init.nonce, &model, false).await;
         server.await.unwrap();
         assert!(app.call.lock().await.is_none());
     }
@@ -126,7 +137,17 @@ async fn live_google_rust_gateway_text_and_native_audio() {
 #[tokio::test]
 #[ignore = "requires matching packaged Rust helper, authorized Gemini key file and live model access"]
 async fn live_google_packaged_rust_child_text_and_native_audio() {
-    async fn run() {
+    run_packaged(false).await;
+}
+
+#[tokio::test]
+#[ignore = "requires matching packaged Rust helper, authorized Gemini key file and live model access"]
+async fn live_google_packaged_long_response_completes() {
+    run_packaged(true).await;
+}
+
+async fn run_packaged(long_response: bool) {
+    async fn run(long_response: bool) {
         let (key, model) = live_configuration();
         let helper = std::env::var_os("CODEX_GEMINI_TEST_HELPER")
             .expect("explicit packaged helper required");
@@ -160,7 +181,7 @@ async fn live_google_packaged_rust_child_text_and_native_audio() {
         let port: u16 = ready["port"].as_u64().unwrap().try_into().unwrap();
         assert_ne!(port, 0);
         let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
-        exercise_live(addr, &nonce, &model).await;
+        exercise_live(addr, &nonce, &model, long_response).await;
         drop(input);
         assert!(
             timeout(Duration::from_secs(5), child.wait())
@@ -171,7 +192,7 @@ async fn live_google_packaged_rust_child_text_and_native_audio() {
         );
         assert!(TcpStream::connect(addr).await.is_err());
     }
-    timeout(Duration::from_secs(50), run())
+    timeout(Duration::from_secs(90), run(long_response))
         .await
         .expect("packaged live gateway deadline");
 }

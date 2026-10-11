@@ -12,6 +12,7 @@ use axum::extract::Multipart;
 use axum::extract::Path;
 use axum::extract::Request;
 use axum::extract::State;
+use axum::extract::ws::CloseFrame;
 use axum::extract::ws::Message as LocalMessage;
 use axum::extract::ws::WebSocket;
 use axum::extract::ws::WebSocketUpgrade;
@@ -410,14 +411,6 @@ async fn call(
                         _ => return Ok(()),
                     }
                 }
-                message = google.next() => {
-                    match message {
-                        Some(Ok(Message::Text(raw))) => translation.google(protocol::object(raw.as_bytes())?)?,
-                        Some(Ok(Message::Binary(raw))) => translation.google(protocol::object(&raw)?)?,
-                        Some(Ok(Message::Ping(_) | Message::Pong(_))) => Effects::default(),
-                        _ => return Err("Gemini disconnected"),
-                    }
-                }
                 received = peer.channels.recv(), if channel.is_none() => {
                     let received = received.ok_or("RTC unavailable")?;
                     if received.label().await.map_err(|_| "RTC unavailable")? != "oai-events"
@@ -469,6 +462,15 @@ async fn call(
                     }
                     Effects::default()
                 }
+                // Service due RTP frames before another burst of provider audio.
+                message = google.next() => {
+                    match message {
+                        Some(Ok(Message::Text(raw))) => translation.google(protocol::object(raw.as_bytes())?)?,
+                        Some(Ok(Message::Binary(raw))) => translation.google(protocol::object(&raw)?)?,
+                        Some(Ok(Message::Ping(_) | Message::Pong(_))) => Effects::default(),
+                        _ => return Err("Gemini disconnected"),
+                    }
+                }
             };
             if apply(effects, &translation, google, &mut media, &mut events).await? {
                 return Ok(());
@@ -477,7 +479,20 @@ async fn call(
     }.await;
     media.clear();
     if let Some(mut socket) = sideband {
-        let _ = timeout(SEND, socket.close()).await;
+        // Only static adapter errors cross the local boundary, never provider payloads.
+        if let Err(reason) = result {
+            let event = json!({"type":"error","error":{"code":"gemini_gateway","message":format!("Gemini voice: {reason}")}});
+            let _ = timeout(
+                SEND,
+                socket.send(LocalMessage::Text(event.to_string().into())),
+            )
+            .await;
+        }
+        let frame = CloseFrame {
+            code: if result.is_ok() { 1000 } else { 1011 },
+            reason: result.err().unwrap_or("voice stopped").into(),
+        };
+        let _ = timeout(SEND, socket.send(LocalMessage::Close(Some(frame)))).await;
     }
     result
 }
@@ -643,6 +658,10 @@ mod tests {
         exercise("close").await;
     }
     #[tokio::test]
+    async fn long_audio_burst_preserves_native_playout_and_sideband() {
+        exercise("long_response").await;
+    }
+    #[tokio::test]
     async fn sideband_loss_closes_google_and_native_peer() {
         exercise("sideband").await;
     }
@@ -659,7 +678,8 @@ mod tests {
         exercise("parent").await;
     }
     async fn exercise(termination: &str) {
-        timeout(Duration::from_secs(20),async{
+        timeout(Duration::from_secs(35),async{
+            let long_response = termination == "long_response";
             let google_listener=TcpListener::bind("127.0.0.1:0").await.unwrap();let google_addr=google_listener.local_addr().unwrap();
             let(mock_tx,mut mock_rx)=mpsc::channel(32);
             let google_task=tokio::spawn(async move{
@@ -673,6 +693,12 @@ mod tests {
                     if value["realtimeInput"]["text"].as_str().is_some_and(|v|v.contains("trigger goAway")){socket.send(Message::Text(json!({"goAway":{}}).to_string().into())).await.unwrap();}
                     if value["realtimeInput"]["audio"].is_object()&&!sent{
                         assert_eq!(value["realtimeInput"]["audio"]["mimeType"],"audio/pcm;rate=16000");let decoded=base64::engine::general_purpose::STANDARD.decode(value["realtimeInput"]["audio"]["data"].as_str().unwrap()).unwrap();assert_eq!(decoded.len(),640);
+                        if long_response {
+                            let pcm = (0..24000).flat_map(|i| (((i as f32 * 0.15).sin() * 4000.0) as i16).to_le_bytes()).collect::<Vec<_>>();
+                            for _ in 0..12 {
+                                socket.send(Message::Text(json!({"serverContent":{"modelTurn":{"parts":[{"inlineData":{"mimeType":"audio/pcm;rate=24000","data":base64::engine::general_purpose::STANDARD.encode(&pcm)}}]}}}).to_string().into())).await.unwrap();
+                            }
+                        }
                         let pcm=(0..4800).flat_map(|i|(((i as f32*0.15).sin()*4000.0) as i16).to_le_bytes()).collect::<Vec<_>>();
                         socket.send(Message::Text(json!({"serverContent":{"inputTranscription":{"text":"inspect"},"outputTranscription":{"text":"working"},"modelTurn":{"parts":[{"inlineData":{"mimeType":"audio/pcm;rate=24000","data":base64::engine::general_purpose::STANDARD.encode(pcm)}}]},"turnComplete":true}}).to_string().into())).await.unwrap();
                         socket.send(Message::Text(json!({"toolCall":{"functionCalls":[{"id":"job1","name":"delegate_to_codex","args":{"task":"inspect files"}}]}}).to_string().into())).await.unwrap();sent=true;
@@ -693,12 +719,54 @@ mod tests {
             loop{let value=mock_rx.recv().await.unwrap();if value.get("toolResponse").is_some(){assert_eq!(value["toolResponse"]["functionResponses"][0]["response"]["status"],"forwarded");break;}}
             let mut decoder=Media::new().unwrap();let mut nonzero=false;
             while !nonzero{if let Some(packet)=native.incoming.take().unwrap(){let pcm=decoder.capture(packet.as_ref()).unwrap();nonzero=pcm.chunks_exact(2).any(|v|i16::from_le_bytes([v[0],v[1]]).unsigned_abs()>100);}tokio::time::sleep(Duration::from_millis(5)).await;}
+            if long_response {
+                let mut audible_samples = 0;
+                while audible_samples < 16000 * 10 {
+                    while let Some(packet) = native.incoming.take().unwrap() {
+                        let pcm = decoder.capture(packet.as_ref()).unwrap();
+                        if pcm.chunks_exact(2).any(|v| i16::from_le_bytes([v[0], v[1]]).unsigned_abs() > 100) {
+                            audible_samples += pcm.len() / 2;
+                        }
+                    }
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+            }
             match termination {
-                "close"=>socket.send(Message::Text(json!({"type":"session.close"}).to_string().into())).await.unwrap(),
+                "close" | "long_response" => {
+                    socket.send(Message::Text(json!({"type":"session.close"}).to_string().into())).await.unwrap();
+                    loop {
+                        match socket.next().await.unwrap().unwrap() {
+                            Message::Close(Some(frame)) => { assert_eq!(u16::from(frame.code), 1000); break; }
+                            Message::Text(raw) => { assert_ne!(serde_json::from_str::<Value>(&raw).unwrap()["type"], "error"); }
+                            other => panic!("unexpected close event: {other:?}"),
+                        }
+                    }
+                },
                 "sideband"=>drop(socket),
                 "native"=>native.close().await.unwrap(),
                 "parent"=>{app.stop.send(true).unwrap();},
-                "goaway"=>socket.send(Message::Text(json!({"type":"session.context.append","channel":"speakable","content":[{"type":"input_text","text":"trigger goAway"}]}).to_string().into())).await.unwrap(),
+                "goaway" => {
+                    socket.send(Message::Text(json!({"type":"session.context.append","channel":"speakable","content":[{"type":"input_text","text":"trigger goAway"}]}).to_string().into())).await.unwrap();
+                    let mut reported = false;
+                    loop {
+                        match socket.next().await.unwrap().unwrap() {
+                            Message::Text(raw) => {
+                                let event: Value = serde_json::from_str(&raw).unwrap();
+                                if event["type"] == "error" {
+                                    assert_eq!(event["error"]["message"], "Gemini voice: provider ended voice session");
+                                    reported = true;
+                                }
+                            }
+                            Message::Close(Some(frame)) => {
+                                assert!(reported);
+                                assert_eq!(u16::from(frame.code), 1011);
+                                assert_eq!(frame.reason, "provider ended voice session");
+                                break;
+                            }
+                            other => panic!("unexpected failure event: {other:?}"),
+                        }
+                    }
+                },
                 _=>unreachable!(),
             }
             loop{if app.call.lock().await.is_none(){break;}tokio::time::sleep(Duration::from_millis(10)).await;}

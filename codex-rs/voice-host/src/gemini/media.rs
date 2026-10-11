@@ -6,7 +6,9 @@ use opus::Decoder;
 use opus::Encoder;
 use rtc::shared::marshal::Unmarshal;
 use std::collections::VecDeque;
-const MAX_SAMPLES: usize = 24000 * 8;
+// Gemini produces audio faster than real time; retain up to two minutes (5.76 MB)
+// without dropping speech or blocking provider events such as interruptions.
+const MAX_SAMPLES: usize = 24000 * 120;
 pub(super) struct Media {
     decoder: Decoder,
     encoder: Encoder,
@@ -64,6 +66,30 @@ impl Media {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn long_response_is_retained_in_order_and_interruption_clears_it() {
+        let mut media = Media::new().unwrap();
+        // Deliver thirty seconds immediately, then consume at the 20 ms RTP cadence.
+        for second in 0..30_i16 {
+            let pcm = vec![second + 1; 24000];
+            media
+                .append(pcm.iter().flat_map(|v| v.to_le_bytes()).collect())
+                .unwrap();
+        }
+        for second in 0..30_i16 {
+            for _ in 0..50 {
+                assert!(media.output.iter().take(480).all(|v| *v == second + 1));
+                media.packet().unwrap();
+            }
+        }
+        assert!(media.output.is_empty());
+        media.append(vec![1; 24000 * 20]).unwrap();
+        media.clear();
+        assert!(media.output.is_empty());
+        media.append(vec![2; 960]).unwrap();
+        assert!(media.output.iter().all(|v| *v == 514));
+    }
+
     #[test]
     fn rate_duration_queue_and_interruption() {
         let mut m = Media::new().unwrap();
