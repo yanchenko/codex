@@ -134,6 +134,7 @@ enum StartupRetry {
 
 #[derive(Default)]
 pub(super) struct RealtimeConversationUiState {
+    frontend_selection: Option<crate::realtime_frontend::RealtimeCallSelection>,
     startup_retry: StartupRetry,
     pub(super) phase: RealtimeConversationPhase,
     recover_late_transcripts: bool,
@@ -312,6 +313,17 @@ impl ChatWidget {
     }
 
     fn start_realtime_conversation(&mut self, thread_id: ThreadId) {
+        let selection = match crate::realtime_frontend::RealtimeCallSelection::capture(
+            &self.config.realtime,
+            self.realtime_openai_voice_unknown,
+        ) {
+            Ok(selection) => selection,
+            Err(error) => {
+                self.add_realtime_error(error);
+                return;
+            }
+        };
+        self.realtime_conversation.frontend_selection = selection;
         let Some(audio) = self.realtime_audio_settings() else {
             return;
         };
@@ -417,6 +429,7 @@ impl ChatWidget {
         if !self.submit_op(AppCommand::RealtimeConversationStart {
             thread_id,
             offer_sdp: offer.offer_sdp.into(),
+            selection: self.realtime_conversation.frontend_selection.clone(),
         }) {
             self.record_realtime_failure();
             self.reset_realtime_conversation();

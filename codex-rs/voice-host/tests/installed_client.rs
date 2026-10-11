@@ -361,3 +361,87 @@ async fn installed_client_negotiates_and_closes_over_udp_and_tcp() -> Result<()>
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn installed_rust_gateway_private_init_readiness_and_parent_eof() -> Result<()> {
+    use std::process::Stdio;
+    use tokio::io::AsyncBufReadExt;
+    use tokio::io::AsyncWriteExt;
+    use tokio::io::BufReader;
+    let directory = tempfile::tempdir()?;
+    let _package = install_helper(directory.path())?;
+    let source = cargo_bin("codex-voice-host")?;
+    let helper = directory
+        .path()
+        .join("codex-resources/voice/bin")
+        .join(source.file_name().unwrap());
+    let mut child = Command::new(helper)
+        .arg("--gemini-live")
+        .env_clear()
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()?;
+    let mut input = child.stdin.take().unwrap();
+    let init = serde_json::json!({"protocol":1,"nonce":"a".repeat(64),"google_api_key":"private-fixture-never-log"});
+    input.write_all(format!("{init}\n").as_bytes()).await?;
+    let mut reader = BufReader::new(child.stdout.take().unwrap());
+    let mut line = String::new();
+    timeout(DEADLINE, reader.read_line(&mut line)).await??;
+    assert!(line.len() < 4096 && !line.contains("private-fixture"));
+    let ready: serde_json::Value = serde_json::from_str(&line)?;
+    assert_eq!(ready["protocol"], 1);
+    assert_eq!(ready["ready"], true);
+    assert_eq!(ready["host"], "127.0.0.1");
+    assert_eq!(ready["build_commit"], build_commit().await?);
+    let port = ready["port"].as_u64().unwrap();
+    assert!(port > 0 && port <= u16::MAX as u64);
+    drop(input);
+    assert!(timeout(DEADLINE, child.wait()).await??.success());
+    assert!(
+        tokio::net::TcpStream::connect(("127.0.0.1", port as u16))
+            .await
+            .is_err()
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn installed_rust_gateway_rejects_invalid_init_without_secret_output() -> Result<()> {
+    use std::process::Stdio;
+    use tokio::io::AsyncWriteExt;
+    let directory = tempfile::tempdir()?;
+    let _package = install_helper(directory.path())?;
+    let source = cargo_bin("codex-voice-host")?;
+    let helper = directory
+        .path()
+        .join("codex-resources/voice/bin")
+        .join(source.file_name().unwrap());
+    let cases = [
+        "not-json private-fixture-never-log\n".to_owned(),
+        format!(
+            "{}\n",
+            serde_json::json!({"protocol":2,"nonce":"a".repeat(64),"google_api_key":"private-fixture-never-log"})
+        ),
+        format!("{}\n", "x".repeat(16385)),
+    ];
+    for input in cases {
+        let mut child = Command::new(&helper)
+            .arg("--gemini-live")
+            .env_clear()
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()?;
+        let mut stdin = child.stdin.take().unwrap();
+        let _ = stdin.write_all(input.as_bytes()).await;
+        drop(stdin);
+        let output = timeout(DEADLINE, child.wait_with_output()).await??;
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+        assert!(!String::from_utf8_lossy(&output.stderr).contains("private-fixture"));
+    }
+    Ok(())
+}

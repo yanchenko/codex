@@ -669,6 +669,12 @@ pub use codex_protocol::protocol::RealtimeVoice;
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct RealtimeConfig {
+    pub backend: Option<codex_protocol::protocol::RealtimeBackend>,
+    #[serde(default)]
+    pub openai: RealtimeOpenaiConfig,
+    pub gemini: Option<RealtimeGeminiConfig>,
+
+    pub local_adapter: Option<RealtimeLocalAdapterConfig>,
     pub version: RealtimeWsVersion,
     #[serde(rename = "type")]
     pub session_type: RealtimeWsMode,
@@ -679,11 +685,55 @@ pub struct RealtimeConfig {
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct RealtimeToml {
+    pub backend: Option<codex_protocol::protocol::RealtimeBackend>,
+    #[serde(default)]
+    pub openai: RealtimeOpenaiConfig,
+    pub gemini: Option<RealtimeGeminiConfig>,
+
+    pub local_adapter: Option<RealtimeLocalAdapterConfig>,
     pub version: Option<RealtimeWsVersion>,
     #[serde(rename = "type")]
     pub session_type: Option<RealtimeWsMode>,
     pub transport: Option<RealtimeTransport>,
     pub voice: Option<RealtimeVoice>,
+}
+
+/// Optional OpenAI voice model choices; omitted model retains the server default.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RealtimeOpenaiConfig {
+    pub model: Option<String>,
+    #[serde(default)]
+    pub models: Vec<String>,
+}
+
+/// Trusted Gemini capability. Only the environment variable name is persisted.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RealtimeGeminiConfig {
+    pub model: String,
+    #[serde(default)]
+    pub models: Vec<String>,
+    #[serde(default = "default_gemini_voice")]
+    pub voice: String,
+    #[serde(default = "default_gemini_key_env")]
+    pub api_key_env: String,
+}
+fn default_gemini_voice() -> String {
+    "Kore".into()
+}
+fn default_gemini_key_env() -> String {
+    "GEMINI_API_KEY".into()
+}
+
+/// Opt-in local voice adapter. This does not change the executor model provider.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RealtimeLocalAdapterConfig {
+    /// Exact origin `http://127.0.0.1:<port>`, without a path or query.
+    pub base_url: String,
+    /// Name of the environment variable containing the per-launch adapter nonce.
+    pub bearer_token_env: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
@@ -1021,6 +1071,24 @@ mod tests {
 
     const WORKSPACE_ID_A: &str = "123e4567-e89b-42d3-a456-426614174000";
     const WORKSPACE_ID_B: &str = "123e4567-e89b-42d3-a456-426614174001";
+
+    #[test]
+    fn realtime_local_adapter_is_explicit_and_rejects_unknown_fields() {
+        let input = r#"
+[realtime.local_adapter]
+base_url = "http://127.0.0.1:1234"
+bearer_token_env = "LOCAL_VOICE_NONCE"
+"#;
+        let config: ConfigToml = toml::from_str(input).unwrap();
+        let adapter = config.realtime.unwrap().local_adapter.unwrap();
+        assert_eq!(adapter.base_url, "http://127.0.0.1:1234");
+        assert_eq!(adapter.bearer_token_env, "LOCAL_VOICE_NONCE");
+        assert!(
+            toml::from_str::<ConfigToml>(&format!("{input}\ntoken = 'do-not-store-secrets'\n"))
+                .is_err()
+        );
+        assert!(RealtimeConfig::default().local_adapter.is_none());
+    }
 
     #[test]
     fn sandbox_mode_uses_executor_platform_and_sandbox_level() {

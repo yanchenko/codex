@@ -3943,6 +3943,14 @@
       },
       "type": "object"
     },
+    "RealtimeBackend": {
+      "description": "Voice frontend only; independent of the coding model/provider.",
+      "enum": [
+        "openai",
+        "gemini"
+      ],
+      "type": "string"
+    },
     "RealtimeConversationVersion": {
       "enum": [
         "v1",
@@ -3951,9 +3959,93 @@
       ],
       "type": "string"
     },
+    "RealtimeGeminiConfig": {
+      "additionalProperties": false,
+      "description": "Trusted Gemini capability. Only the environment variable name is persisted.",
+      "properties": {
+        "api_key_env": {
+          "default": "GEMINI_API_KEY",
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "models": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "voice": {
+          "default": "Kore",
+          "type": "string"
+        }
+      },
+      "required": [
+        "model"
+      ],
+      "type": "object"
+    },
+    "RealtimeLocalAdapterConfig": {
+      "additionalProperties": false,
+      "description": "Opt-in local voice adapter. This does not change the executor model provider.",
+      "properties": {
+        "base_url": {
+          "description": "Exact origin `http://127.0.0.1:<port>`, without a path or query.",
+          "type": "string"
+        },
+        "bearer_token_env": {
+          "description": "Name of the environment variable containing the per-launch adapter nonce.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "base_url",
+        "bearer_token_env"
+      ],
+      "type": "object"
+    },
+    "RealtimeOpenaiConfig": {
+      "additionalProperties": false,
+      "description": "Optional OpenAI voice model choices; omitted model retains the server default.",
+      "properties": {
+        "model": {
+          "type": "string"
+        },
+        "models": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
     "RealtimeToml": {
       "additionalProperties": false,
       "properties": {
+        "backend": {
+          "$ref": "#/definitions/RealtimeBackend"
+        },
+        "gemini": {
+          "$ref": "#/definitions/RealtimeGeminiConfig"
+        },
+        "local_adapter": {
+          "$ref": "#/definitions/RealtimeLocalAdapterConfig"
+        },
+        "openai": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/RealtimeOpenaiConfig"
+            }
+          ],
+          "default": {
+            "model": null,
+            "models": []
+          }
+        },
         "transport": {
           "$ref": "#/definitions/RealtimeTransport"
         },

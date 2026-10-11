@@ -315,6 +315,7 @@ async fn conversation_start_audio_text_close_round_trip() -> Result<()> {
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            frontend: None,
             client_managed_handoffs: false,
             delegation_ack_filler: None,
             flush_transcript_tail_on_session_end: false,
@@ -497,6 +498,7 @@ async fn conversation_records_history_without_an_event_observer(
     for session_count in 1..=2 {
         test.codex
             .submit(Op::RealtimeConversationStart(ConversationStartParams {
+                frontend: None,
                 client_managed_handoffs: false,
                 delegation_ack_filler: None,
                 flush_transcript_tail_on_session_end: false,
@@ -608,6 +610,7 @@ async fn conversation_start_defaults_to_v2_and_gpt_realtime_1_5() -> Result<()> 
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            frontend: None,
             client_managed_handoffs: false,
             delegation_ack_filler: None,
             flush_transcript_tail_on_session_end: false,
@@ -703,6 +706,7 @@ async fn conversation_websocket_transports_send_codex_headers_without_creating_a
 
     codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            frontend: None,
             client_managed_handoffs: false,
             delegation_ack_filler: None,
             flush_transcript_tail_on_session_end: false,
@@ -873,6 +877,7 @@ async fn conversation_webrtc_frameless_chatgpt_sends_codex_headers_to_backend(
 
     codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            frontend: None,
             client_managed_handoffs: false,
             delegation_ack_filler: None,
             flush_transcript_tail_on_session_end: false,
@@ -1035,6 +1040,7 @@ async fn conversation_webrtc_start_posts_generated_session() -> Result<()> {
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            frontend: None,
             client_managed_handoffs: false,
             delegation_ack_filler: None,
             flush_transcript_tail_on_session_end: false,
@@ -1400,6 +1406,7 @@ async fn conversation_webrtc_live_reconnects_sideband_after_unclean_disconnect(
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            frontend: None,
             client_managed_handoffs: false,
             delegation_ack_filler: None,
             flush_transcript_tail_on_session_end: false,
@@ -1556,6 +1563,7 @@ async fn conversation_webrtc_start_uses_avas_query() -> Result<()> {
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            frontend: None,
             client_managed_handoffs: false,
             delegation_ack_filler: None,
             flush_transcript_tail_on_session_end: false,
@@ -1662,6 +1670,7 @@ async fn conversation_webrtc_default_v1_ignores_configured_v2_voice() -> Result<
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            frontend: None,
             client_managed_handoffs: false,
             delegation_ack_filler: None,
             flush_transcript_tail_on_session_end: false,
@@ -1730,6 +1739,7 @@ async fn conversation_webrtc_default_v1_rejects_explicit_v2_voice() -> Result<()
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            frontend: None,
             client_managed_handoffs: false,
             delegation_ack_filler: None,
             flush_transcript_tail_on_session_end: false,
@@ -1808,6 +1818,7 @@ async fn conversation_webrtc_start_uses_configured_call_base_url_for_avas() -> R
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            frontend: None,
             client_managed_handoffs: false,
             delegation_ack_filler: None,
             flush_transcript_tail_on_session_end: false,
@@ -1923,6 +1934,7 @@ async fn conversation_webrtc_close_while_sideband_connecting_drops_pending_join(
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            frontend: None,
             client_managed_handoffs: false,
             delegation_ack_filler: None,
             flush_transcript_tail_on_session_end: false,
@@ -2031,6 +2043,7 @@ async fn conversation_webrtc_sideband_connect_failure_closes_with_error() -> Res
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            frontend: None,
             client_managed_handoffs: false,
             delegation_ack_filler: None,
             flush_transcript_tail_on_session_end: false,
@@ -2139,6 +2152,7 @@ async fn conversation_start_uses_openai_env_key_fallback_with_chatgpt_auth() -> 
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            frontend: None,
             client_managed_handoffs: false,
             delegation_ack_filler: None,
             flush_transcript_tail_on_session_end: false,
@@ -2241,6 +2255,7 @@ async fn assert_transport_close_tail_flush(
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            frontend: None,
             client_managed_handoffs: false,
             delegation_ack_filler: None,
             flush_transcript_tail_on_session_end,
@@ -2375,6 +2390,7 @@ async fn conversation_start_preflight_failure_emits_realtime_error_only() -> Res
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            frontend: None,
             client_managed_handoffs: false,
             delegation_ack_filler: None,
             flush_transcript_tail_on_session_end: false,
@@ -2434,6 +2450,7 @@ async fn conversation_start_connect_failure_emits_realtime_error_only() -> Resul
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            frontend: None,
             client_managed_handoffs: false,
             delegation_ack_filler: None,
             flush_transcript_tail_on_session_end: false,
@@ -2547,6 +2564,7 @@ async fn conversation_second_start_replaces_runtime() -> Result<()> {
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            frontend: None,
             client_managed_handoffs: false,
             delegation_ack_filler: None,
             flush_transcript_tail_on_session_end: false,
@@ -2585,6 +2603,7 @@ async fn conversation_second_start_replaces_runtime() -> Result<()> {
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            frontend: None,
             client_managed_handoffs: false,
             delegation_ack_filler: None,
             flush_transcript_tail_on_session_end: false,
@@ -2695,6 +2714,7 @@ async fn conversation_uses_experimental_realtime_ws_base_url_override() -> Resul
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            frontend: None,
             client_managed_handoffs: false,
             delegation_ack_filler: None,
             flush_transcript_tail_on_session_end: false,
@@ -2775,6 +2795,7 @@ async fn conversation_uses_default_realtime_backend_prompt() -> Result<()> {
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            frontend: None,
             client_managed_handoffs: false,
             delegation_ack_filler: None,
             flush_transcript_tail_on_session_end: false,
@@ -2866,6 +2887,7 @@ async fn conversation_uses_empty_instructions_for_null_or_empty_prompt() -> Resu
     ] {
         test.codex
             .submit(Op::RealtimeConversationStart(ConversationStartParams {
+                frontend: None,
                 client_managed_handoffs: false,
                 delegation_ack_filler: None,
                 flush_transcript_tail_on_session_end: false,
@@ -2950,6 +2972,7 @@ async fn conversation_uses_explicit_start_voice() -> Result<()> {
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            frontend: None,
             client_managed_handoffs: false,
             delegation_ack_filler: None,
             flush_transcript_tail_on_session_end: false,
@@ -3024,6 +3047,7 @@ async fn conversation_uses_configured_realtime_voice() -> Result<()> {
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            frontend: None,
             client_managed_handoffs: false,
             delegation_ack_filler: None,
             flush_transcript_tail_on_session_end: false,
@@ -3083,6 +3107,7 @@ async fn conversation_rejects_voice_for_wrong_realtime_version() -> Result<()> {
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            frontend: None,
             client_managed_handoffs: false,
             delegation_ack_filler: None,
             flush_transcript_tail_on_session_end: false,
@@ -3145,6 +3170,7 @@ async fn conversation_uses_experimental_realtime_ws_backend_prompt_override() ->
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            frontend: None,
             client_managed_handoffs: false,
             delegation_ack_filler: None,
             flush_transcript_tail_on_session_end: false,
@@ -3231,6 +3257,7 @@ async fn conversation_uses_experimental_realtime_ws_startup_context_override() -
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            frontend: None,
             client_managed_handoffs: false,
             delegation_ack_filler: None,
             flush_transcript_tail_on_session_end: false,
@@ -3310,6 +3337,7 @@ async fn conversation_disables_realtime_startup_context_with_empty_override() ->
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            frontend: None,
             client_managed_handoffs: false,
             delegation_ack_filler: None,
             flush_transcript_tail_on_session_end: false,
@@ -3382,6 +3410,7 @@ async fn conversation_start_injects_startup_context_from_thread_history() -> Res
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            frontend: None,
             client_managed_handoffs: false,
             delegation_ack_filler: None,
             flush_transcript_tail_on_session_end: false,
@@ -3510,6 +3539,7 @@ async fn conversation_startup_context_current_thread_selects_many_turns_by_budge
 
     codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            frontend: None,
             client_managed_handoffs: false,
             delegation_ack_filler: None,
             flush_transcript_tail_on_session_end: false,
@@ -3630,6 +3660,7 @@ async fn conversation_startup_context_falls_back_to_workspace_map() -> Result<()
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            frontend: None,
             client_managed_handoffs: false,
             delegation_ack_filler: None,
             flush_transcript_tail_on_session_end: false,
@@ -3702,6 +3733,7 @@ async fn conversation_startup_context_is_truncated_and_sent_once_per_start() -> 
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            frontend: None,
             client_managed_handoffs: false,
             delegation_ack_filler: None,
             flush_transcript_tail_on_session_end: false,
@@ -3807,6 +3839,7 @@ async fn conversation_user_text_turn_is_not_sent_to_realtime(ephemeral: bool) ->
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            frontend: None,
             client_managed_handoffs: false,
             delegation_ack_filler: None,
             flush_transcript_tail_on_session_end: false,
@@ -3948,6 +3981,7 @@ async fn realtime_v2_noop_tool_call_returns_empty_function_output_without_respon
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            frontend: None,
             client_managed_handoffs: false,
             delegation_ack_filler: None,
             flush_transcript_tail_on_session_end: false,
@@ -4066,6 +4100,7 @@ async fn conversation_mirrors_assistant_message_text_to_realtime_handoff(
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            frontend: None,
             client_managed_handoffs: false,
             delegation_ack_filler: None,
             flush_transcript_tail_on_session_end: false,
@@ -4199,6 +4234,7 @@ async fn conversation_relays_only_public_reasoning_as_quiet_status(enabled: bool
     let test = builder.build_with_streaming_server(&api_server).await?;
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            frontend: None,
             client_managed_handoffs: false,
             delegation_ack_filler: None,
             flush_transcript_tail_on_session_end: false,
@@ -4386,6 +4422,7 @@ async fn conversation_routes_assistant_messages_for_v3_handoff(
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            frontend: None,
             client_managed_handoffs: false,
             delegation_ack_filler: None,
             flush_transcript_tail_on_session_end: false,
@@ -4586,6 +4623,7 @@ async fn conversation_handoff_persists_across_item_done_until_turn_complete(
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            frontend: None,
             client_managed_handoffs: false,
             delegation_ack_filler: None,
             flush_transcript_tail_on_session_end: false,
@@ -4752,6 +4790,7 @@ async fn inbound_handoff_request_starts_turn_and_promotes_its_artifact() -> Resu
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            frontend: None,
             client_managed_handoffs: false,
             delegation_ack_filler: None,
             flush_transcript_tail_on_session_end: false,
@@ -4917,6 +4956,7 @@ async fn inbound_handoff_request_uses_active_transcript() -> Result<()> {
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            frontend: None,
             client_managed_handoffs: false,
             delegation_ack_filler: None,
             flush_transcript_tail_on_session_end: false,
@@ -5032,6 +5072,7 @@ async fn inbound_handoff_request_sends_transcript_delta_after_each_handoff() -> 
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            frontend: None,
             client_managed_handoffs: false,
             delegation_ack_filler: None,
             flush_transcript_tail_on_session_end: false,
@@ -5171,6 +5212,7 @@ async fn conversation_close_routes_only_remaining_transcript_tail_once() -> Resu
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            frontend: None,
             client_managed_handoffs: false,
             delegation_ack_filler: None,
             flush_transcript_tail_on_session_end: true,
@@ -5277,6 +5319,7 @@ async fn inbound_conversation_item_does_not_start_turn_and_still_forwards_audio(
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            frontend: None,
             client_managed_handoffs: false,
             delegation_ack_filler: None,
             flush_transcript_tail_on_session_end: false,
@@ -5412,6 +5455,7 @@ async fn delegated_turn_user_role_echo_does_not_redelegate_and_still_forwards_au
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            frontend: None,
             client_managed_handoffs: false,
             delegation_ack_filler: None,
             flush_transcript_tail_on_session_end: false,
@@ -5577,6 +5621,7 @@ async fn inbound_handoff_request_does_not_block_realtime_event_forwarding() -> R
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            frontend: None,
             client_managed_handoffs: false,
             delegation_ack_filler: None,
             flush_transcript_tail_on_session_end: false,
@@ -5762,6 +5807,7 @@ async fn inbound_handoff_request_updates_realtime_state_during_active_turn(
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            frontend: None,
             client_managed_handoffs: false,
             delegation_ack_filler: None,
             flush_transcript_tail_on_session_end,
@@ -6003,6 +6049,7 @@ async fn inbound_handoff_request_starts_turn_and_does_not_block_realtime_audio()
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            frontend: None,
             client_managed_handoffs: false,
             delegation_ack_filler: None,
             flush_transcript_tail_on_session_end: false,

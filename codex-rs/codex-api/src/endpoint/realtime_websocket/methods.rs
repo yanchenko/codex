@@ -1,3 +1,4 @@
+use crate::LocalRealtimeAdapter;
 use crate::endpoint::realtime_websocket::methods_common::conversation_function_call_output_message;
 use crate::endpoint::realtime_websocket::methods_common::conversation_handoff_append_message;
 use crate::endpoint::realtime_websocket::methods_common::conversation_item_create_message;
@@ -20,6 +21,7 @@ use crate::endpoint::realtime_websocket::protocol::RealtimeTranscriptEntry;
 use crate::endpoint::realtime_websocket::protocol::RealtimeVoice;
 use crate::endpoint::realtime_websocket::protocol::parse_realtime_event;
 use crate::error::ApiError;
+use crate::local_realtime_adapter::MAX_ADAPTER_CONTEXT_BYTES;
 use crate::provider::Provider;
 use codex_client::backoff;
 use codex_http_client::HttpClientFactory;
@@ -249,6 +251,7 @@ pub struct RealtimeWebsocketWriter {
     is_closed: Arc<AtomicBool>,
     event_parser: RealtimeEventParser,
     context_append_channel: Option<RealtimeContextAppendChannel>,
+    atomic_context_append: bool,
 }
 
 #[derive(Clone)]
@@ -325,6 +328,7 @@ impl RealtimeWebsocketConnection {
                 is_closed: Arc::clone(&is_closed),
                 event_parser,
                 context_append_channel: None,
+                atomic_context_append: false,
             },
             events: RealtimeWebsocketEvents {
                 rx_message,
@@ -467,6 +471,35 @@ impl RealtimeWebsocketWriter {
     }
 
     async fn send_json(&self, message: &RealtimeOutboundMessage) -> Result<(), ApiError> {
+        if self.atomic_context_append
+            && matches!(
+                message,
+                RealtimeOutboundMessage::DelegationContextAppend { .. }
+                    | RealtimeOutboundMessage::SessionContextAppend { .. }
+            )
+        {
+            let content = match message {
+                RealtimeOutboundMessage::DelegationContextAppend { content, .. }
+                | RealtimeOutboundMessage::SessionContextAppend { content, .. } => content,
+                _ => unreachable!(),
+            };
+            if content.iter().map(|part| part.text.len()).sum::<usize>() > 128 * 1024 {
+                return Err(ApiError::InvalidRequest {
+                    message: "local adapter context text exceeds 128 KiB; shorten the voice result"
+                        .to_owned(),
+                });
+            }
+            let payload = serde_json::to_string(message).map_err(|_| ApiError::InvalidRequest {
+                message: "failed to encode local adapter context".to_owned(),
+            })?;
+            if payload.len() > MAX_ADAPTER_CONTEXT_BYTES {
+                return Err(ApiError::InvalidRequest {
+                    message: "local adapter context exceeds 256 KiB; shorten the voice result"
+                        .to_owned(),
+                });
+            }
+            return self.send_payload(payload).await;
+        }
         match message {
             RealtimeOutboundMessage::DelegationContextAppend {
                 delegation_item_id,
@@ -833,6 +866,7 @@ pub struct RealtimeWebsocketClient {
     provider: Provider,
     http_client_factory: HttpClientFactory,
     webrtc_sideband_base_url: String,
+    local_adapter: Option<LocalRealtimeAdapter>,
 }
 
 #[derive(Clone, Copy)]
@@ -848,7 +882,23 @@ impl RealtimeWebsocketClient {
             provider,
             http_client_factory,
             webrtc_sideband_base_url: OPENAI_REALTIME_API_BASE_URL.to_string(),
+            local_adapter: None,
         }
+    }
+
+    pub fn is_local_adapter(&self) -> bool {
+        self.local_adapter.is_some()
+    }
+
+    /// Uses a credential-isolated local adapter for the existing WebRTC sideband.
+    pub fn with_local_adapter(mut self, adapter: LocalRealtimeAdapter) -> Self {
+        self.provider = adapter.provider();
+        self.webrtc_sideband_base_url = adapter.api_base_url();
+        self.http_client_factory =
+            HttpClientFactory::new(codex_http_client::OutboundProxyPolicy::ReqwestDefault)
+                .with_network_policy(self.http_client_factory.network_policy().clone());
+        self.local_adapter = Some(adapter);
+        self
     }
 
     /// Overrides the direct WebRTC sideband URL for local development and tests.
@@ -1034,11 +1084,21 @@ impl RealtimeWebsocketClient {
             .as_str()
             .into_client_request()
             .map_err(|err| ApiError::Stream(format!("failed to build websocket request: {err}")))?;
-        let headers = merge_request_headers(
-            &self.provider.headers,
-            with_session_id_header(extra_headers, config.session_id.as_deref())?,
-            default_headers,
-        );
+        let headers = if let Some(adapter) = &self.local_adapter {
+            adapter.validate_sideband_url(&ws_url)?;
+            if config.event_parser != RealtimeEventParser::FramelessBidi {
+                return Err(ApiError::InvalidRequest {
+                    message: "local realtime adapter requires realtime v3".to_owned(),
+                });
+            }
+            adapter.headers()
+        } else {
+            merge_request_headers(
+                &self.provider.headers,
+                with_session_id_header(extra_headers, config.session_id.as_deref())?,
+                default_headers,
+            )
+        };
         request.headers_mut().extend(headers);
 
         info!("connecting realtime websocket: {ws_url}");
@@ -1063,10 +1123,17 @@ impl RealtimeWebsocketClient {
         };
         let connector = WebSocketConnector::new_with_tls_mode(&self.http_client_factory, tls_mode)
             .map_err(|err| ApiError::Stream(format!("failed to configure websocket TLS: {err}")))?;
-        let (stream, response) = connector
-            .connect(request, websocket_config())
+        let (stream, response) = if self.local_adapter.is_some() {
+            tokio::time::timeout(
+                Duration::from_secs(15),
+                connector.connect_loopback_direct(request, websocket_config()),
+            )
             .await
-            .map_err(map_realtime_websocket_connect_error)?;
+            .map_err(|_| ApiError::Stream("local realtime adapter sideband timed out".to_owned()))?
+        } else {
+            connector.connect(request, websocket_config()).await
+        }
+        .map_err(map_realtime_websocket_connect_error)?;
         info!(
             ws_url = %ws_url,
             status = %response.status(),
@@ -1074,12 +1141,13 @@ impl RealtimeWebsocketClient {
         );
 
         let (stream, rx_message) = WsStream::new(stream);
-        let connection = RealtimeWebsocketConnection::new(
+        let mut connection = RealtimeWebsocketConnection::new(
             stream,
             rx_message,
             config.event_parser,
             transcript_state,
         );
+        connection.writer.atomic_context_append = self.local_adapter.is_some();
         let initialize_session = match session_initialization {
             RealtimeSessionInitialization::NewSession => true,
             RealtimeSessionInitialization::LegacyWebrtcSideband => {

@@ -1272,6 +1272,11 @@ pub(crate) enum AppEvent {
     OpenRealtimeSettings,
     OpenRealtimeSoundDevices,
     OpenRealtimeVoices,
+    OpenRealtimeBackends,
+    OpenRealtimeModels,
+    PersistRealtimeFrontend {
+        setting: crate::realtime_frontend::FrontendSetting,
+    },
     OpenRealtimeDevicePicker {
         kind: codex_realtime_webrtc::AudioDeviceKind,
     },

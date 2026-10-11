@@ -134,6 +134,7 @@ async fn webrtc_sideband_honors_configured_system_proxy() -> Result<()> {
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            frontend: None,
             client_managed_handoffs: false,
             delegation_ack_filler: None,
             flush_transcript_tail_on_session_end: false,

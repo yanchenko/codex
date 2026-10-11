@@ -7,6 +7,7 @@ use pretty_assertions::assert_eq;
 fn realtime_start_debug_redacts_text_and_transport() {
     let secret = "credential-bearing-content";
     let mut params = ConversationStartParams {
+        frontend: None,
         client_managed_handoffs: false,
         delegation_ack_filler: None,
         flush_transcript_tail_on_session_end: false,
@@ -47,5 +48,18 @@ fn realtime_start_debug_redacts_text_and_transport() {
             format!("{params:?}"),
             "ConversationStartParams { output_modality: Audio, initial_items_count: 1, version: Some(V3), .. }"
         );
+    }
+}
+
+#[test]
+fn frontend_request_carries_provider_voice_but_no_credentials_or_endpoint_capability() {
+    let frontend: RealtimeFrontend =
+        serde_json::from_value(serde_json::json!({"backend":"gemini","voice":"Kore"})).unwrap();
+    assert_eq!(frontend.backend, RealtimeBackend::Gemini);
+    assert_eq!(frontend.voice.as_deref(), Some("Kore"));
+    for field in ["apiKey", "baseUrl", "nonce"] {
+        let mut value = serde_json::json!({"backend":"gemini"});
+        value[field] = serde_json::json!("untrusted");
+        assert!(serde_json::from_value::<RealtimeFrontend>(value).is_err());
     }
 }

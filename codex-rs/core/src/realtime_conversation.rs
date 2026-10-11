@@ -87,6 +87,7 @@ use tracing::warn;
 
 mod bem;
 mod existing_call;
+mod gemini_gateway;
 mod sideband;
 mod transcript_tail;
 
@@ -525,6 +526,7 @@ struct ConversationState {
     // A misalignment failure retires only this session's queued handoffs.
     route_handoffs: Arc<RealtimeHandoffAdmission>,
     stop_token: CancellationToken,
+    gateway: Option<gemini_gateway::GeminiGateway>,
 }
 
 struct RealtimeStart {
@@ -540,6 +542,8 @@ struct RealtimeStart {
     backend_reasoning_status: bool,
     codex_response_handoff_channel_prefixes: Option<BTreeMap<String, Vec<String>>>,
     realtime_call_api_provider: Option<ApiProvider>,
+    local_adapter: Option<codex_api::LocalRealtimeAdapter>,
+    gateway: Option<gemini_gateway::GeminiGateway>,
     session_config: RealtimeSessionConfig,
     model_client: ModelClient,
     sdp: Option<String>,
@@ -657,6 +661,8 @@ impl RealtimeConversationManager {
             backend_reasoning_status,
             codex_response_handoff_channel_prefixes,
             realtime_call_api_provider,
+            local_adapter,
+            gateway,
             session_config,
             model_client,
             sdp,
@@ -707,6 +713,10 @@ impl RealtimeConversationManager {
             Some(base_url) => client.with_webrtc_sideband_base_url(base_url),
             None => client,
         };
+        let client = match &local_adapter {
+            Some(adapter) => client.with_local_adapter(adapter.clone()),
+            None => client,
+        };
         let transcript_tail_flush = RealtimeTranscriptTailFlush {
             enabled: flush_transcript_tail_on_session_end,
             tx: transcript_tail_tx,
@@ -718,6 +728,7 @@ impl RealtimeConversationManager {
                     session_config.clone(),
                     extra_headers.unwrap_or_default(),
                     realtime_call_api_provider,
+                    local_adapter.as_ref(),
                 )
                 .await?;
             let task = spawn_webrtc_sideband_input_task(RealtimeWebrtcSidebandInputTask {
@@ -794,6 +805,7 @@ impl RealtimeConversationManager {
             realtime_active: Arc::clone(&realtime_active),
             route_handoffs: Arc::clone(&route_handoffs),
             stop_token,
+            gateway,
         });
         state.mode_instructions = Some(mode_instructions);
         state.context_active = true;
@@ -1274,6 +1286,11 @@ async fn stop_conversation_state(
     state.realtime_active.store(false, Ordering::Relaxed);
     state.stop_token.cancel();
     let _ = state.input_task.await;
+    if let Some(gateway) = state.gateway.take()
+        && let Err(error) = gateway.shutdown().await
+    {
+        tracing::warn!(%error, "Gemini gateway retirement was not confirmed");
+    }
 
     if let Some(fanout_task) = state.fanout_task.take() {
         match fanout_task_stop {
@@ -1335,6 +1352,8 @@ struct PreparedRealtimeConversationStart {
     realtime_start_instructions: Option<String>,
     realtime_end_instructions: Option<String>,
     realtime_call_api_provider: Option<ApiProvider>,
+    local_adapter: Option<codex_api::LocalRealtimeAdapter>,
+    gateway: Option<gemini_gateway::GeminiGateway>,
     requested_realtime_session_id: Option<String>,
     version: RealtimeWsVersion,
     session_config: RealtimeSessionConfig,
@@ -1347,9 +1366,67 @@ pub(crate) enum ConfiguredRealtimeVoice {
     Ignore,
 }
 
+fn resolve_local_realtime_adapter(
+    config: &crate::config::Config,
+    params: &ConversationStartParams,
+) -> CodexResult<Option<codex_api::LocalRealtimeAdapter>> {
+    let Some(adapter) = &config.realtime.local_adapter else {
+        return Ok(None);
+    };
+    if config.experimental_realtime_ws_base_url.is_some()
+        || config.experimental_realtime_webrtc_call_base_url.is_some()
+    {
+        return Err(CodexErr::InvalidRequest(
+            "local realtime adapter conflicts with legacy realtime URL overrides".to_owned(),
+        ));
+    }
+    if !matches!(
+        params.transport,
+        Some(ConversationStartTransport::Webrtc { .. })
+    ) || params.version != Some(RealtimeWsVersion::V3)
+        || config.realtime.session_type != RealtimeWsMode::Conversational
+    {
+        return Err(CodexErr::InvalidRequest(
+            "local realtime adapter requires a new conversational WebRTC v3 call".to_owned(),
+        ));
+    }
+    let name = &adapter.bearer_token_env;
+    if name.is_empty()
+        || !name.bytes().enumerate().all(|(index, byte)| {
+            byte == b'_' || byte.is_ascii_alphabetic() || (index > 0 && byte.is_ascii_digit())
+        })
+    {
+        return Err(CodexErr::InvalidRequest(
+            "local realtime adapter requires a valid nonce environment variable name".to_owned(),
+        ));
+    }
+    let token = std::env::var(name).map_err(|_| {
+        CodexErr::InvalidRequest(
+            "local realtime adapter nonce environment variable is missing or invalid".to_owned(),
+        )
+    })?;
+    codex_api::LocalRealtimeAdapter::new(&adapter.base_url, &token)
+        .map(Some)
+        .map_err(map_api_error)
+}
+
+fn validate_frontend_identifier(value: &str, max: usize) -> CodexResult<()> {
+    if value.is_empty()
+        || value.len() > max
+        || !value
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_' | b'.'))
+    {
+        return Err(CodexErr::InvalidRequest(
+            "Invalid voice frontend model or voice identifier".into(),
+        ));
+    }
+    Ok(())
+}
+
 async fn prepare_realtime_start(
     sess: &Arc<Session>,
-    params: ConversationStartParams,
+    mut params: ConversationStartParams,
 ) -> CodexResult<PreparedRealtimeConversationStart> {
     let provider = sess.provider().await;
     let auth_manager = sess
@@ -1358,7 +1435,100 @@ async fn prepare_realtime_start(
         .auth_manager()
         .unwrap_or_else(|| Arc::clone(&sess.services.auth_manager));
     let config = sess.get_config().await;
-    let (auth, http_client_factory) = match auth_manager.auth_with_http_client_factory().await {
+    let frontend = params.frontend.clone();
+    let existing_call = matches!(
+        params.transport,
+        Some(ConversationStartTransport::ExistingCall { .. })
+    );
+    if existing_call && frontend.is_some() {
+        return Err(CodexErr::InvalidRequest(
+            "Cannot select a frontend for an existing call".into(),
+        ));
+    }
+    let backend = frontend
+        .as_ref()
+        .map(|value| value.backend)
+        .or(if existing_call {
+            None
+        } else {
+            config.realtime.backend
+        });
+    let (local_adapter, gateway) = match backend {
+        Some(codex_protocol::protocol::RealtimeBackend::Gemini) => {
+            if config.experimental_realtime_ws_base_url.is_some()
+                || config.experimental_realtime_webrtc_call_base_url.is_some()
+                || config.realtime.local_adapter.is_some()
+            {
+                return Err(CodexErr::InvalidRequest("Managed Gemini Live cannot be combined with legacy realtime endpoint or local_adapter overrides".into()));
+            }
+            let settings = config.realtime.gemini.as_ref().ok_or_else(|| CodexErr::InvalidRequest("Configure realtime.gemini with a model and api_key_env before selecting Gemini Live".into()))?;
+            if !matches!(
+                params.transport,
+                Some(ConversationStartTransport::Webrtc { .. })
+            ) || params.version != Some(RealtimeWsVersion::V3)
+                || config.realtime.session_type != RealtimeWsMode::Conversational
+            {
+                return Err(CodexErr::InvalidRequest(
+                    "Gemini Live requires a new conversational WebRTC v3 call".into(),
+                ));
+            }
+            if params.voice.is_some() {
+                return Err(CodexErr::InvalidRequest(
+                    "Gemini uses frontend.voice, not the OpenAI voice field".into(),
+                ));
+            }
+            if !params.initial_items.is_empty() {
+                return Err(CodexErr::InvalidRequest(
+                    "Gemini Live does not support startup initialItems; append live context after starting the call".into(),
+                ));
+            }
+            let model = params.model.as_deref().unwrap_or(&settings.model);
+            let voice = frontend
+                .as_ref()
+                .and_then(|value| value.voice.as_deref())
+                .unwrap_or(&settings.voice);
+            validate_frontend_identifier(model, 128)?;
+            validate_frontend_identifier(voice, 64)?;
+            if settings.models.len() > 32
+                || (model != settings.model
+                    && !settings.models.iter().any(|allowed| allowed == model))
+            {
+                return Err(CodexErr::InvalidRequest(
+                    "Gemini model must be selected from configured realtime.gemini.model/models"
+                        .into(),
+                ));
+            }
+            let (adapter, gateway) = gemini_gateway::GeminiGateway::start(settings)
+                .await
+                .map_err(|error| CodexErr::InvalidRequest(error.to_string()))?;
+            let adapter = adapter.with_gemini(model, voice).map_err(map_api_error)?;
+            params.model = Some(model.to_owned());
+            (Some(adapter), Some(gateway))
+        }
+        Some(codex_protocol::protocol::RealtimeBackend::Openai) => {
+            if let Some(voice) = frontend.as_ref().and_then(|value| value.voice.as_ref()) {
+                if params.voice.is_some() {
+                    return Err(CodexErr::InvalidRequest(
+                        "Specify only one OpenAI voice override".into(),
+                    ));
+                }
+                params.voice = Some(
+                    serde_json::from_value(serde_json::Value::String(voice.clone()))
+                        .map_err(|_| CodexErr::InvalidRequest("Unknown OpenAI voice".into()))?,
+                );
+            }
+            if params.model.is_none() && frontend.is_none() {
+                params.model = config.realtime.openai.model.clone();
+            }
+            (None, None)
+        }
+        None => (resolve_local_realtime_adapter(&config, &params)?, None),
+    };
+    let (auth, http_client_factory) = match if local_adapter.is_some() {
+        None
+    } else {
+        auth_manager.auth_with_http_client_factory().await
+    } {
         Some((auth, captured_factory)) if auth.is_chatgpt_auth() || auth.is_api_key_auth() => (
             Some(auth),
             config
@@ -1372,7 +1542,10 @@ async fn prepare_realtime_start(
         .transport
         .clone()
         .unwrap_or(ConversationStartTransport::Websocket);
-    let mut api_provider = provider.to_api_provider(Some(AuthMode::ApiKey))?;
+    let mut api_provider = match &local_adapter {
+        Some(adapter) => adapter.provider(),
+        None => provider.to_api_provider(Some(AuthMode::ApiKey))?,
+    };
     let realtime_sideband_base_url = match &transport {
         ConversationStartTransport::ExistingCall {
             sideband_base_url, ..
@@ -1412,6 +1585,7 @@ async fn prepare_realtime_start(
             if params.include_startup_context
                 || params.prompt.is_some()
                 || !params.initial_items.is_empty()
+                || params.frontend.is_some()
                 || params.model.is_some()
                 || params.voice.is_some()
                 || params.delegation_ack_filler.is_some()
@@ -1424,11 +1598,16 @@ async fn prepare_realtime_start(
         }
         ConversationStartTransport::Websocket => {}
     }
-    let configured_voice = match (&transport, params.version) {
-        (ConversationStartTransport::ExistingCall { .. }, _)
-        | (ConversationStartTransport::Webrtc { .. }, None) => ConfiguredRealtimeVoice::Ignore,
-        (ConversationStartTransport::Webrtc { .. } | ConversationStartTransport::Websocket, _) => {
-            ConfiguredRealtimeVoice::Use
+    let configured_voice = if backend == Some(codex_protocol::protocol::RealtimeBackend::Gemini) {
+        ConfiguredRealtimeVoice::Ignore
+    } else {
+        match (&transport, params.version) {
+            (ConversationStartTransport::ExistingCall { .. }, _)
+            | (ConversationStartTransport::Webrtc { .. }, None) => ConfiguredRealtimeVoice::Ignore,
+            (
+                ConversationStartTransport::Webrtc { .. } | ConversationStartTransport::Websocket,
+                _,
+            ) => ConfiguredRealtimeVoice::Use,
         }
     };
     let mut session_config =
@@ -1487,6 +1666,8 @@ async fn prepare_realtime_start(
         realtime_start_instructions: params.realtime_start_instructions,
         realtime_end_instructions: params.realtime_end_instructions,
         realtime_call_api_provider,
+        local_adapter,
+        gateway,
         requested_realtime_session_id,
         version,
         session_config,
@@ -1588,7 +1769,11 @@ pub(crate) async fn build_realtime_session_config(
         params
             .model
             .clone()
-            .or_else(|| config.experimental_realtime_ws_model.clone())
+            .or_else(|| {
+                (params.frontend.is_none() && config.realtime.backend.is_none())
+                    .then(|| config.experimental_realtime_ws_model.clone())
+                    .flatten()
+            })
             .unwrap_or_else(|| match version {
                 RealtimeWsVersion::V1 | RealtimeWsVersion::V2 => DEFAULT_REALTIME_MODEL.to_string(),
                 RealtimeWsVersion::V3 => DEFAULT_FRAMELESS_REALTIME_MODEL.to_string(),
@@ -1712,6 +1897,8 @@ async fn handle_start_inner(
         realtime_start_instructions,
         realtime_end_instructions,
         realtime_call_api_provider,
+        local_adapter,
+        gateway,
         requested_realtime_session_id,
         version,
         session_config,
@@ -1740,6 +1927,8 @@ async fn handle_start_inner(
         backend_reasoning_status,
         codex_response_handoff_channel_prefixes,
         realtime_call_api_provider,
+        local_adapter,
+        gateway,
         session_config,
         model_client: sess.services.model_client.clone(),
         sdp,

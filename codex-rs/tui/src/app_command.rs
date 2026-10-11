@@ -102,6 +102,8 @@ pub(crate) enum AppCommand {
     RealtimeConversationStart {
         thread_id: ThreadId,
         offer_sdp: RealtimeOfferSdp,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        selection: Option<crate::realtime_frontend::RealtimeCallSelection>,
     },
     RealtimeConversationStop {
         thread_id: ThreadId,

@@ -90,6 +90,7 @@ async fn misalignment_retires_late_voice_handoff_before_it_starts_a_turn() -> Re
     let test = builder.build_with_auto_env(&api_server).await?;
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            frontend: None,
             client_managed_handoffs: false,
             delegation_ack_filler: None,
             flush_transcript_tail_on_session_end: false,

@@ -174,8 +174,28 @@ pub struct W3cTraceContext {
     pub tracestate: Option<String>,
 }
 
+/// Voice frontend only; independent of the coding model/provider.
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum RealtimeBackend {
+    #[default]
+    Openai,
+    Gemini,
+}
+
+/// Per-call selection. URLs and credentials remain trusted server configuration.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RealtimeFrontend {
+    pub backend: RealtimeBackend,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub voice: Option<String>,
+}
+
 #[derive(Clone, PartialEq)]
 pub struct ConversationStartParams {
+    pub frontend: Option<RealtimeFrontend>,
     /// Whether Codex response handoffs are managed through explicit client append calls.
     pub client_managed_handoffs: bool,
     /// Whether a realtime V3 delegation produces an acknowledgement filler.

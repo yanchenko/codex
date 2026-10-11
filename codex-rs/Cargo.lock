@@ -1137,6 +1137,7 @@ dependencies = [
  "matchit 0.8.4",
  "memchr",
  "mime",
+ "multer",
  "percent-encoding",
  "pin-project-lite",
  "serde_core",
@@ -2924,6 +2925,7 @@ dependencies = [
  "codex-apply-patch",
  "codex-async-utils",
  "codex-attachment-store",
+ "codex-build-info",
  "codex-client",
  "codex-code-mode",
  "codex-config",
@@ -5209,10 +5211,13 @@ name = "codex-voice-host"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "axum",
+ "base64 0.22.1",
  "codex-install-context",
  "codex-process-hardening",
  "codex-realtime-webrtc",
  "codex-utils-cargo-bin",
+ "codex-utils-rustls-provider",
  "cpal",
  "crossbeam-queue",
  "futures",
@@ -5225,9 +5230,12 @@ dependencies = [
  "rand 0.9.3",
  "rtc",
  "rubato",
+ "serde",
+ "serde_json",
  "sonora",
  "tempfile",
  "tokio",
+ "tokio-tungstenite",
  "webrtc",
 ]
 
@@ -10318,6 +10326,23 @@ name = "muldiv"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "956787520e75e9bd233246045d19f42fb73242759cc57fba9611d940ae96d4b0"
+
+[[package]]
+name = "multer"
+version = "3.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "83e87776546dc87511aa5ee218730c92b666d7264ab6ed41f9d215af9cd5224b"
+dependencies = [
+ "bytes",
+ "encoding_rs",
+ "futures-util",
+ "http 1.4.0",
+ "httparse",
+ "memchr",
+ "mime",
+ "spin",
+ "version_check",
+]
 
 [[package]]
 name = "multimap"

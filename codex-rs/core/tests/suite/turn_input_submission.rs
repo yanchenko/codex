@@ -419,6 +419,7 @@ async fn host_drain_closes_realtime_after_handoff_error() -> anyhow::Result<()> 
         .await?;
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            frontend: None,
             client_managed_handoffs: false,
             delegation_ack_filler: None,
             flush_transcript_tail_on_session_end: false,
