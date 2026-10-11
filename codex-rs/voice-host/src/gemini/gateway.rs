@@ -156,8 +156,19 @@ async fn create(State(app): State<Arc<App>>, mut multipart: Multipart) -> Respon
         Ok((sdp, setup))
     })
     .await;
-    let Ok(Ok((sdp, setup))) = body else {
-        return (StatusCode::BAD_REQUEST, "invalid local voice request").into_response();
+    let (sdp, setup) = match body {
+        Ok(Ok(request)) => request,
+        // Validation errors are static strings; never echo SDP, context, or credentials.
+        Ok(Err(reason)) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                format!("invalid local voice request: {reason}"),
+            )
+                .into_response();
+        }
+        Err(_) => {
+            return (StatusCode::REQUEST_TIMEOUT, "local voice request timed out").into_response();
+        }
     };
     if app.used.swap(true, Ordering::SeqCst) {
         return (StatusCode::CONFLICT, "gateway already claimed").into_response();
@@ -593,6 +604,40 @@ mod tests {
         socket.read_to_string(&mut response).await.unwrap();
         response
     }
+    #[tokio::test]
+    async fn invalid_offer_reports_static_reason_without_request_content() {
+        let (stop, _) = watch::channel(false);
+        let app = Arc::new(App {
+            init: init(),
+            used: AtomicBool::new(false),
+            call: Mutex::new(None),
+            stop,
+            google_mock: None,
+        });
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let routes = router(app.clone());
+        let server = tokio::spawn(async move { axum::serve(listener, routes).await.unwrap() });
+        let response = request(
+            addr,
+            &app.init.nonce,
+            "private-sdp-sentinel".into(),
+            "private-model-sentinel",
+        )
+        .await;
+        assert!(response.starts_with("HTTP/1.1 400"));
+        assert!(
+            response.contains("invalid local voice request: local audio and datachannel required")
+        );
+        assert!(!response.contains("private-sdp-sentinel"));
+        assert!(!response.contains("private-model-sentinel"));
+        assert!(!response.contains(&app.init.nonce));
+        assert!(!app.used.load(Ordering::SeqCst));
+        assert!(app.call.lock().await.is_none());
+        server.abort();
+        let _ = server.await;
+    }
+
     #[tokio::test]
     async fn actual_http_sideband_native_rtp_mock_google_and_cleanup() {
         exercise("close").await;

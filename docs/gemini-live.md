@@ -21,7 +21,15 @@ api_key_env = "GEMINI_API_KEY"
 
 The model above is an example, not an availability guarantee for your Google account. Use a bare model identifier without `models/`. Set the named environment variable before launching Codex; never put the key itself in the config, command arguments, or a voice request. The default key variable is `GEMINI_API_KEY`. Normal executor environment policy still applies to variables inherited by Codex. Its default exclusions cover names containing `KEY`, `SECRET`, or `TOKEN`; a custom name outside those patterns requires an explicit shell environment exclusion. Deliberately including a secret through that policy remains possible. This feature does not rewrite executor environment policy.
 
-Launch the matching installed package and open `/voice settings`. **Backend**, **Model**, and **Choose voice** select the frontend for the next voice conversation. Existing audio device settings remain in the same menu. Switching these preferences does not change the coding model or replace a running voice conversation. Stop and start voice to use a new selection.
+Launch the matching installed package with `--no-daemon`, then open `/voice settings`:
+
+```sh
+/path/to/package/bin/codex --no-daemon
+```
+
+This keeps the TUI on its matching server and gives that server the key environment from the launch. An already-running older shared daemon can discard the new Gemini settings and show “Configure realtime.gemini.model” even when the file is correct; it also does not inherit keys added to a later terminal session. Restarting only the TUI without `--no-daemon` can reconnect to that same daemon.
+
+**Backend**, **Model**, and **Choose voice** select the frontend for the next voice conversation. Existing audio device settings remain in the same menu. Switching these preferences does not change the coding model or replace a running voice conversation. Stop and start voice to use a new selection.
 
 The model picker uses the selected model and up to 32 configured model choices; it does not query Google or OpenAI for models. Model identifiers have a 128-byte bound. Gemini voice identifiers have a 64-byte bound. The Gemini voice picker includes Google's documented prebuilt voice names and preserves your configured voice if it is newer than the built-in list. Provider availability is checked on connection. See [Google's Live voice documentation](https://ai.google.dev/gemini-api/docs/live-api/capabilities#change-voice-and-language).
 

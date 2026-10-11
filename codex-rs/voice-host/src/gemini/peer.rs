@@ -114,7 +114,12 @@ fn normalized_offer(sdp: &str) -> Result<String, &'static str> {
         if let Some(candidate) = line.strip_prefix("a=candidate:") {
             count += 1;
             let fields = candidate.split_whitespace().collect::<Vec<_>>();
-            if count > 32 || fields.len() < 8 || fields[6] != "typ" || fields[7] != "host" {
+            // Native ICE emits candidates for every interface, transport and bundled
+            // media section, including candidates the IPv4/UDP answerer discards.
+            if count > 128 {
+                return Err("too many local ICE candidates");
+            }
+            if fields.len() < 8 || fields[6] != "typ" || fields[7] != "host" {
                 return Err("invalid local candidate");
             }
             let ip = fields[4]
@@ -311,6 +316,51 @@ mod tests {
         .await
         .unwrap();
     }
+    fn many_local_candidates(count: usize) -> String {
+        let mut offer = "m=audio 9 UDP/TLS/RTP/SAVPF 111\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\na=setup:actpass\r\n".to_owned();
+        for index in 0..count {
+            let (transport, address) = if index < 2 {
+                ("UDP", "127.0.0.1")
+            } else if index % 2 == 0 {
+                ("TCP", "::1")
+            } else {
+                ("UDP", "::1")
+            };
+            offer.push_str(&format!(
+                "a=candidate:{index} 1 {transport} 1 {address} 9000 typ host\r\n"
+            ));
+        }
+        offer
+    }
+
+    #[test]
+    fn native_multi_interface_offer_normalizes_36_candidates() {
+        let normalized = normalized_offer(&many_local_candidates(36)).unwrap();
+        assert_eq!(normalized.matches("a=candidate:").count(), 2);
+        assert!(!normalized.contains("::1"));
+        assert!(!normalized.contains(" TCP "));
+    }
+
+    #[test]
+    fn raw_candidate_limit_remains_bounded_before_filtering() {
+        assert!(normalized_offer(&many_local_candidates(128)).is_ok());
+        assert_eq!(
+            normalized_offer(&many_local_candidates(129)),
+            Err("too many local ICE candidates")
+        );
+    }
+
+    #[test]
+    fn unsupported_transport_still_cannot_hide_remote_or_nonhost_candidates() {
+        for candidate in [
+            "a=candidate:remote 1 TCP 1 203.0.113.1 9000 typ host\r\n",
+            "a=candidate:relay 1 TCP 1 127.0.0.1 9000 typ relay\r\n",
+        ] {
+            let offer = format!("{}{candidate}", many_local_candidates(36));
+            assert!(normalized_offer(&offer).is_err());
+        }
+    }
+
     #[test]
     fn remote_candidate_rejected() {
         assert!(validate_offer("a=candidate:1 1 UDP 1 8.8.8.8 9 typ host\r\n").is_err());
