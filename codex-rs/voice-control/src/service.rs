@@ -528,6 +528,96 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn on_follows_replacement_owner_without_bind_and_persists_before_dispatch() {
+        let temp = tempfile::tempdir().unwrap();
+        let directory = temp.path().join("control");
+        let task = launch(&directory).await;
+        let mut admin = configure(&directory).await;
+        let (old_owner, old) = register(&directory).await;
+        admin.request(Operation::Start { epoch: 0 }).await.unwrap();
+        drop(old_owner);
+        // Observe actual transport cleanup, rather than synthesizing Disconnect.
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while admin
+                .snapshot()
+                .await
+                .unwrap()
+                .instances
+                .contains_key(&old.instance)
+            {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        let (mut new_owner, new) = register(&directory).await;
+        assert_ne!(old.instance, new.instance);
+        let started = admin.request(Operation::Start { epoch: 0 }).await.unwrap();
+        assert_eq!(started.bound, Some(new.instance));
+        let persisted: Registry =
+            serde_json::from_reader(std::fs::File::open(directory.join("state.json")).unwrap())
+                .unwrap();
+        assert_eq!(persisted.bound, Some(new.instance));
+        assert!(persisted.instances[&new.instance].start_requested);
+        let dispatched = new_owner.snapshot().await.unwrap();
+        assert!(dispatched.instances[&new.instance].start_requested);
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn confirmed_call_selects_next_on_over_ipc_without_explicit_bind() {
+        let temp = tempfile::tempdir().unwrap();
+        let directory = temp.path().join("control");
+        let task = launch(&directory).await;
+        let mut admin = configure(&directory).await;
+        let (_other_owner, other) = register(&directory).await;
+        let (mut owner, call) = register(&directory).await;
+        assert!(admin.request(Operation::Start { epoch: 0 }).await.is_err());
+        let guard = crate::LeaseGuard::create(&directory, &call).unwrap();
+        owner
+            .request(Operation::Reserve {
+                call: call.clone(),
+                epoch: 0,
+            })
+            .await
+            .unwrap();
+        let active = owner
+            .request(Operation::Active {
+                call: call.clone(),
+                epoch: 0,
+            })
+            .await
+            .unwrap();
+        assert_eq!(active.bound, Some(call.instance));
+        assert!(active.confirmed_active);
+        let stopped = admin.request(Operation::GlobalOff).await.unwrap();
+        assert!(stopped.leases[&call.instance].stop_requested);
+        assert!(
+            admin
+                .request(Operation::Start {
+                    epoch: stopped.epoch
+                })
+                .await
+                .is_err()
+        );
+        drop(guard);
+        let retired = owner
+            .request(Operation::Retired { call: call.clone() })
+            .await
+            .unwrap();
+        assert!(!retired.confirmed_active);
+        let restarted = admin
+            .request(Operation::Start {
+                epoch: retired.epoch,
+            })
+            .await
+            .unwrap();
+        assert!(restarted.instances[&call.instance].start_requested);
+        assert!(!restarted.instances[&other.instance].start_requested);
+        task.abort();
+    }
+
+    #[tokio::test]
     async fn disconnected_owner_is_quarantined_and_cannot_be_reclaimed_by_admin() {
         let temp = tempfile::tempdir().unwrap();
         let directory = temp.path().join("control");

@@ -22,6 +22,8 @@ The coordinator is shared per OS user, independently of `CODEX_HOME`. `CODEX_VOI
 
 The combined build uses coordinator protocol version 2. Use an isolated `CODEX_VOICE_CONTROL_DIR` for comparison with older PR3 packages, or stop all calls and stop the old coordinator before using the new CLI. Incompatible peers fail with a restart diagnostic. Do not remove occupied lease files to bypass compatibility or retirement checks.
 
+When upgrading to a build with automatic targeting, an already running coordinator keeps its old behavior. First stop managed calls with `voice-control off`, wait for an empty lease set and `stopping: false`, close participating TUIs, and release the Caps monitor. Restart the coordinator and monitor using the new binary, then reopen managed sessions. Merely launching a new CLI against an older coordinator does not install the new targeting behavior. Preserve the runtime journal during this restart.
+
 ## Global lifecycle controls
 
 ```sh
@@ -31,7 +33,11 @@ codex voice-control off
 codex voice-control status
 ```
 
-Binding chooses the enrolled thread targeted by ON. OFF requests termination of all managed native calls, including starts already in progress. The TUI polls control state every 250 ms: OFF is a stop request, not an instantaneous microphone mute. An already admitted start can briefly progress before cancellation arrives. Completion requires an empty lease set and `stopping: false`; only actual helper exit and startup-worker retirement allow reuse. Unknown owners remain reserved until the same-file lock/tombstone recovery proves that no helper can still use them. Existing unmanaged calls are outside this coordinator.
+ON uses the most recently confirmed voice session or the session explicitly selected with `bind`. Starting voice in another session replaces the remembered target only after its start is confirmed; a failed start or repeated confirmation does not replace that selection. `bind` selects the next ON target until another call genuinely becomes active; it is not a permanent pin. OFF and native retirement retain this selection for the next conversation. Switching only the provider in the same enrolled thread retains it as well. This selects a voice owner, not the frontmost terminal.
+
+When the selected session has closed, or no session has been selected, ON automatically selects the **only connected managed session**. A fresh Codex process can therefore use a new UUID without a manual `bind`. If several sessions are connected with no live selection, ON refuses with a diagnostic: start voice in the intended session using `/voice`, or inspect `status` and explicitly `bind` its UUID. Enrollment and reconnect order never pick a target. A connected selected session remains selected when other terminals open. `status` reports the remembered target in `bound`; the sole-session fallback is resolved and saved when ON is requested. Navigating to a different thread clears the old selection and uses the same sole-session/explicit-selection rules.
+
+OFF requests termination of all managed native calls, including starts already in progress. The TUI polls control state every 250 ms: OFF is a stop request, not an instantaneous microphone mute. An already admitted start can briefly progress before cancellation arrives. Completion requires an empty lease set and `stopping: false`; only actual helper exit and startup-worker retirement allow reuse. Unknown owners remain reserved until the same-file lock/tombstone recovery proves that no helper can still use them. Existing unmanaged calls are outside this coordinator.
 
 ## Explicit macOS Caps setup
 
@@ -45,7 +51,7 @@ codex voice-control caps run
 
 `status` does not prompt. `setup` explicitly requests Input Monitoring if undetermined and applies no remap. If access was denied, enable the responsible terminal/Codex binary in System Settings > Privacy & Security > Input Monitoring and relaunch. TCC attribution after rebuild/relocation has not been physically verified. Accessibility and Full Disk Access are not requested.
 
-`run` is a foreground headless monitor. It takes a singleton ownership lock, preserves unrelated mapping entries, and admits raw Caps edges only after the corresponding service mapping is confirmed. Repeated/held pre-ownership presses are not replayed. An incompatible existing Caps mapping, unavailable device association, permission loss or failed LED report stops acquisition with an error. OFF stops calls; ON requires an explicitly bound live owner. The LED is driven from confirmed aggregate lifecycle; unknown state retains its previous confirmed value. A successful HID output report is not proof that the physical LED changed.
+`run` is a foreground headless monitor. Keep it running while closing or reopening participating Codex sessions; starting an ordinary Codex session does not launch the monitor or acquire keyboard access. It takes a singleton ownership lock, preserves unrelated mapping entries, and admits raw Caps edges only after the corresponding service mapping is confirmed. Repeated/held pre-ownership presses are not replayed. An incompatible existing Caps mapping, unavailable device association, permission loss or failed LED report stops acquisition with an error. OFF stops calls; ON uses the selection rules above. Selection errors appear in the monitor's terminal. The LED is driven from confirmed aggregate lifecycle; unknown state retains its previous confirmed value. A successful HID output report is not proof that the physical LED changed.
 
 Ctrl-C releases keyboard ownership. Alternatively:
 
@@ -58,6 +64,9 @@ Disable does not stop voice calls. While the monitor runs it requests release; c
 
 ## Manual acceptance still required
 
+- [ ] With the Caps monitor running, open just one managed Codex session and press Caps without `bind`: voice starts and the LED lights after confirmation. Stop voice, close Codex, reopen it with a new UUID, and repeat without binding. The new session should start; no old session should receive a start request.
+- [ ] Open two managed sessions with no live selection: Caps ON must refuse and neither session should start. Start `/voice` in one, stop it with Caps, then press Caps again: the same session should restart. Explicitly bind the other session and repeat; duplicate confirmations must not undo the selection. OFF must still stop all managed calls.
+- [ ] After stopping a call, switch provider within the selected thread and confirm the next ON keeps that thread and uses the new provider's configured pool. Repeat separately with OpenAI and Gemini in this combined build.
 - [ ] Start two managed terminals, confirm different audible voices and an explicit third-start refusal when a two-voice pool is exhausted; stop one and verify reuse only after retirement.
 - [ ] Start by terminal shortcut and Caps; rapidly request OFF during startup and verify every helper ends, coding work continues, and the LED changes only after confirmed lifecycle.
 - [ ] Deny/grant/revoke Input Monitoring; verify clear diagnostics and owned-only mapping cleanup with a stable installed binary.
