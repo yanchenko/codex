@@ -260,3 +260,226 @@ fn corrupt_journal_cannot_recover_an_empty_pool_or_duplicate_voice() {
     state.pools.get_mut("openai").unwrap().voices.clear();
     assert!(state.recover().is_err());
 }
+
+fn start(state: &mut Registry) {
+    *state = state
+        .transition(Operation::Start { epoch: state.epoch })
+        .unwrap();
+}
+
+fn activate(state: &mut Registry, call: &Call) {
+    *state = state
+        .transition(Operation::Active {
+            call: call.clone(),
+            epoch: state.epoch,
+        })
+        .unwrap();
+}
+
+#[test]
+fn on_automatically_selects_sole_live_session_after_process_restart() {
+    let mut state = setup(&["alloy"]);
+    let old = register(&mut state);
+    assert_eq!(state.bound, None);
+    start(&mut state);
+    assert_eq!(state.bound, Some(old.instance));
+    state = state
+        .transition(Operation::Disconnect {
+            instance: old.instance,
+        })
+        .unwrap();
+    let new = register(&mut state);
+    assert_ne!(new.instance, old.instance);
+    start(&mut state);
+    assert_eq!(state.bound, Some(new.instance));
+    assert!(state.instances[&new.instance].start_requested);
+    assert!(!state.instances[&old.instance].start_requested);
+}
+
+#[test]
+fn recovery_replaces_disconnected_binding_only_when_on_is_requested() {
+    let mut state = setup(&["alloy"]);
+    let old = register(&mut state);
+    start(&mut state);
+    state.recover().unwrap();
+    let new = register(&mut state);
+    assert_eq!(state.bound, Some(old.instance));
+    start(&mut state);
+    assert_eq!(state.bound, Some(new.instance));
+    assert!(!state.instances[&old.instance].start_requested);
+}
+
+#[test]
+fn missing_or_ambiguous_target_refuses_on_without_selecting_registration_order() {
+    let mut state = setup(&["alloy"]);
+    assert!(
+        state
+            .transition(Operation::Start { epoch: state.epoch })
+            .unwrap_err()
+            .to_string()
+            .contains("no live managed voice session")
+    );
+    let first = register(&mut state);
+    register(&mut state);
+    assert_eq!(state.bound, None);
+    let before = state.clone();
+    assert!(
+        state
+            .transition(Operation::Start { epoch: state.epoch })
+            .unwrap_err()
+            .to_string()
+            .contains("voice-control bind INSTANCE_UUID")
+    );
+    assert_eq!(state, before);
+    state = state
+        .transition(Operation::Bind {
+            instance: first.instance,
+        })
+        .unwrap();
+    state.recover().unwrap();
+    register(&mut state);
+    register(&mut state);
+    assert!(
+        state
+            .transition(Operation::Start { epoch: state.epoch })
+            .is_err()
+    );
+    assert_eq!(state.bound, Some(first.instance));
+}
+
+#[test]
+fn confirmed_call_is_remembered_across_global_off_and_native_retirement() {
+    let mut state = setup(&["alloy", "ash"]);
+    let first = register(&mut state);
+    let last = register(&mut state);
+    reserve(&mut state, &first);
+    activate(&mut state, &first);
+    reserve(&mut state, &last);
+    assert_eq!(state.bound, Some(first.instance));
+    activate(&mut state, &last);
+    assert_eq!(state.bound, Some(last.instance));
+    state = state.transition(Operation::GlobalOff).unwrap();
+    assert!(state.leases.values().all(|lease| lease.stop_requested));
+    assert!(
+        state
+            .transition(Operation::Start { epoch: state.epoch })
+            .is_err()
+    );
+    state = state
+        .transition(Operation::Retired { call: first })
+        .unwrap();
+    state = state
+        .transition(Operation::Retired { call: last.clone() })
+        .unwrap();
+    assert!(!state.confirmed_active);
+    start(&mut state);
+    assert_eq!(state.bound, Some(last.instance));
+    assert!(state.instances[&last.instance].start_requested);
+    assert_eq!(
+        state
+            .instances
+            .values()
+            .filter(|owner| owner.start_requested)
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn explicit_target_survives_duplicate_ack_but_next_confirmed_call_selects_itself() {
+    let mut state = setup(&["alloy", "ash"]);
+    let first = register(&mut state);
+    let second = register(&mut state);
+    reserve(&mut state, &first);
+    activate(&mut state, &first);
+    state = state
+        .transition(Operation::Bind {
+            instance: second.instance,
+        })
+        .unwrap();
+    activate(&mut state, &first);
+    assert_eq!(state.bound, Some(second.instance));
+    start(&mut state);
+    // Later explicit selection affects the next ON, not an already queued ON.
+    state = state
+        .transition(Operation::Bind {
+            instance: first.instance,
+        })
+        .unwrap();
+    assert!(state.instances[&second.instance].start_requested);
+    assert!(!state.instances[&first.instance].start_requested);
+    reserve(&mut state, &second);
+    activate(&mut state, &second);
+    assert_eq!(state.bound, Some(second.instance));
+}
+
+#[test]
+fn stale_active_and_start_cannot_change_selected_target() {
+    let mut state = setup(&["alloy", "ash"]);
+    let first = register(&mut state);
+    let second = register(&mut state);
+    reserve(&mut state, &first);
+    state = state
+        .transition(Operation::Bind {
+            instance: second.instance,
+        })
+        .unwrap();
+    let epoch = state.epoch;
+    state = state.transition(Operation::GlobalOff).unwrap();
+    let before = state.clone();
+    assert!(
+        state
+            .transition(Operation::Active { call: first, epoch })
+            .is_err()
+    );
+    assert!(state.transition(Operation::Start { epoch }).is_err());
+    assert_eq!(state, before);
+}
+
+#[test]
+fn provider_only_change_preserves_selection_but_owner_change_clears_it() {
+    let mut state = setup(&["alloy"]);
+    state = state
+        .transition(Operation::Configure {
+            provider: "other-provider".into(),
+            voices: vec!["other-voice".into()],
+        })
+        .unwrap();
+    let first = register(&mut state);
+    register(&mut state);
+    state = state
+        .transition(Operation::Bind {
+            instance: first.instance,
+        })
+        .unwrap();
+    state = state
+        .transition(Operation::Register {
+            instance: first.instance,
+            owner: first.owner.clone(),
+            provider: "other-provider".into(),
+        })
+        .unwrap();
+    assert_eq!(state.bound, Some(first.instance));
+    start(&mut state);
+    reserve(&mut state, &first);
+    assert_eq!(state.leases[&first.instance].provider, "other-provider");
+    assert_eq!(state.leases[&first.instance].voice, "other-voice");
+    state = state
+        .transition(Operation::Retired {
+            call: first.clone(),
+        })
+        .unwrap();
+    state = state
+        .transition(Operation::Register {
+            instance: first.instance,
+            owner: "different-thread".into(),
+            provider: "other-provider".into(),
+        })
+        .unwrap();
+    assert_eq!(state.bound, None);
+    assert!(
+        state
+            .transition(Operation::Start { epoch: state.epoch })
+            .is_err()
+    );
+}

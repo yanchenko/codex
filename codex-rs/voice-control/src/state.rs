@@ -68,6 +68,8 @@ pub struct Registry {
     pub instances: BTreeMap<Uuid, Instance>,
     pub leases: BTreeMap<Uuid, Lease>,
     pub retired: BTreeMap<Uuid, u64>,
+    /// Explicitly selected or most recently confirmed voice owner. A missing or
+    /// disconnected target may be replaced by the sole live owner at ON time.
     pub bound: Option<Uuid>,
     /// Last confirmed aggregate indicator. Unknown never invents an all-off result.
     pub confirmed_active: bool,
@@ -258,11 +260,11 @@ impl Registry {
                             !self.leases.contains_key(&instance) && !previous.start_requested,
                             "cannot rebind an instance with a pending or active call"
                         );
-                        previous.owner = owner;
-                        previous.provider = provider;
-                        if self.bound == Some(instance) {
+                        if previous.owner != owner && self.bound == Some(instance) {
                             self.bound = None;
                         }
+                        previous.owner = owner;
+                        previous.provider = provider;
                     }
                     previous.connected = true;
                 } else {
@@ -286,9 +288,7 @@ impl Registry {
             Operation::Start { epoch } => {
                 ensure!(epoch == self.epoch, "stale global-start epoch");
                 ensure!(!self.stopping, "global stop is awaiting native retirement");
-                let id = self
-                    .bound
-                    .ok_or_else(|| anyhow::anyhow!("bind a live instance first"))?;
+                let id = self.start_target()?;
                 ensure!(
                     !self.leases.values().any(|lease| lease.call.instance == id),
                     "target already has a voice call"
@@ -299,6 +299,7 @@ impl Registry {
                     .ok_or_else(|| anyhow::anyhow!("unknown target"))?;
                 ensure!(instance.connected, "target is disconnected");
                 instance.start_requested = true;
+                self.bound = Some(id);
             }
             Operation::GlobalOff => {
                 self.epoch = self
@@ -383,8 +384,12 @@ impl Registry {
                     lease.epoch == epoch && !lease.stop_requested && lease.phase != Phase::Unknown,
                     "stale start acknowledgment; retire native call"
                 );
+                let newly_active = lease.phase == Phase::Reserved;
                 lease.phase = Phase::Active;
                 self.confirmed_active = true;
+                if newly_active {
+                    self.bound = Some(call.instance);
+                }
             }
             Operation::Retired { call } => {
                 if self.leases.contains_key(&call.instance) {
@@ -460,6 +465,33 @@ impl Registry {
         {
             self.confirmed_active = false;
         }
+    }
+
+    fn start_target(&self) -> Result<Uuid> {
+        if let Some(id) = self.bound
+            && self
+                .instances
+                .get(&id)
+                .is_some_and(|instance| instance.connected)
+        {
+            return Ok(id);
+        }
+        // Resolve only when ON is requested. Registration/reconnection order
+        // must not silently choose among several managed terminals.
+        let mut live = self
+            .instances
+            .values()
+            .filter(|instance| instance.connected);
+        let target = live.next().ok_or_else(|| {
+            anyhow::anyhow!(
+                "no live managed voice session; open Codex with realtime.managed_voice=true"
+            )
+        })?;
+        ensure!(
+            live.next().is_none(),
+            "multiple live managed voice sessions; start voice in the intended session or select it with voice-control bind INSTANCE_UUID"
+        );
+        Ok(target.id)
     }
 
     fn instance(&self, id: Uuid) -> Result<&Instance> {
